@@ -1,31 +1,27 @@
 import subprocess
-from llm_client import llm
+from langchain.tools import tool
 
-def execute(user_message: str, session_id: str = "default") -> str:
+@tool
+def execute_system_command(command: str) -> str:
     """
-    Translates the user's request into a bash command, executes it, and returns the result.
+    Executes a bash/system command on the local machine and returns the output or error.
+    Use this to run terminal commands (e.g., ls, df, curl, etc.).
+    IMPORTANT: If using curl with URLs containing '&', you MUST wrap the URL in quotes!
     """
-    system_prompt = """You are a Linux command generator. 
-The user will ask you to perform a system task. 
-Your ONLY job is to output the EXACT terminal command to run. 
-Do NOT wrap the command in markdown, backticks, or any explanation. 
-Just the raw bash command."""
-
-    command = llm.ask(prompt=user_message, system_prompt=system_prompt)
-    
-    # Very basic safety check to prevent accidental destructive commands if needed
-    # (Though we rely on Telegram whitelisting for security)
-    
     try:
         result = subprocess.run(command, shell=True, check=True, text=True, capture_output=True, timeout=10)
         output = result.stdout.strip()
         if not output:
             output = "Command executed successfully with no output."
+        
+        # Truncate output if it is too long to prevent LLM context limit errors (Error 413)
+        if len(output) > 2000:
+            return output[:2000] + "\n\n... [OUTPUT TRUNCATED DUE TO LENGTH: The output was over 2000 characters. If you need to see the full output, please re-run the command and redirect it to a file using '> output.txt' and then read the file.]"
             
-        return f"Ran command: `{command}`\n\nOutput:\n```\n{output}\n```"
+        return output
     except subprocess.CalledProcessError as e:
-        return f"Failed to run: `{command}`\n\nError:\n```\n{e.stderr.strip()}\n```"
+        return f"Error: {e.stderr.strip()}"
     except subprocess.TimeoutExpired:
-        return f"Command `{command}` timed out."
+        return "Error: Command timed out after 10 seconds."
     except Exception as e:
-        return f"Error executing system command: {e}"
+        return f"Error executing command: {e}"

@@ -2,24 +2,8 @@ import os
 import history_manager
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from router import detect_skill
-
-# Import skills dynamically based on router output, or just import all and map them
-import skills.chat_skill as chat_skill
-import skills.system_skill as system_skill
-import skills.scheduler_skill as scheduler_skill
-import skills.http_skill as http_skill
-import skills.web_search_skill as web_search_skill
-import skills.coder_skill as coder_skill
-
-SKILL_MAP = {
-    "chat_skill": chat_skill,
-    "system_skill": system_skill,
-    "scheduler_skill": scheduler_skill,
-    "http_skill": http_skill,
-    "web_search_skill": web_search_skill,
-    "coder_skill": coder_skill
-}
+from agent import agent_executor
+from langchain_core.messages import HumanMessage, AIMessage
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.message.from_user.id)
@@ -34,24 +18,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Send "typing" action
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    # 1. Route the intent
-    skill_name = detect_skill(text)
-    
-    # Save User Message
     session_id = f"telegram_{user_id}"
-    history_manager.add_message(session_id, "user", text)
     
-    # 2. Execute the skill
-    skill_module = SKILL_MAP.get(skill_name, chat_skill)
+    # Fetch history
+    past_messages = history_manager.get_history(session_id, limit=10)
+    messages = []
+    for msg in past_messages:
+        if msg["role"] == "user":
+            messages.append(HumanMessage(content=msg["content"]))
+        else:
+            messages.append(AIMessage(content=msg["content"]))
+            
+    messages.append(HumanMessage(content=text))
+    
     try:
-        response = skill_module.execute(text, session_id=session_id)
+        # Invoke Agent
+        # Note: Depending on deployment, a long agent run might block if not using async invoke (ainvoke)
+        # But for simplicity we'll just run it synchronously in the handler.
+        result = agent_executor.invoke({"messages": messages})
+        response = result["messages"][-1].content
     except Exception as e:
-        response = f"Error executing {skill_name}: {e}"
+        response = f"Error executing agent: {e}"
         
-    # Save Assistant Response
+    # Save to history
+    history_manager.add_message(session_id, "user", text)
     history_manager.add_message(session_id, "assistant", response)
         
-    # 3. Send response
+    # Send response
     # Telegram max message length is 4096
     if len(response) > 4000:
         response = response[:4000] + "\n...[truncated]"

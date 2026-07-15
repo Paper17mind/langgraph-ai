@@ -13,8 +13,9 @@ class LLMClient:
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.groq_key = os.getenv("GROQ_API_KEY")
         
-        self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
-        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+        self.ninerouter_key = os.getenv("9ROUTER_API_KEY", "")
+        self.ninerouter_url = os.getenv("9ROUTER_URL", "https://9router.com/api/v1/chat/completions")
+        self.ninerouter_model = os.getenv("9ROUTER_MODEL", "google/gemini-pro")
         
         self.router_model = os.getenv("ROUTER_MODEL", "groq")
         self.chat_model = os.getenv("CHAT_MODEL", "gemini")
@@ -103,26 +104,35 @@ class LLMClient:
             except Exception as e:
                 response_text = f"Error with Gemini: {e}"
                 
-        elif model == "openrouter" and self.openrouter_key:
+        elif model == "9router":
             headers = {
-                "Authorization": f"Bearer {self.openrouter_key}",
                 "Content-Type": "application/json"
             }
+            if self.ninerouter_key:
+                headers["Authorization"] = f"Bearer {self.ninerouter_key}"
+                
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             
             payload = {
-                "model": self.openrouter_model,
+                "model": self.ninerouter_model,
                 "messages": messages,
                 "temperature": 0.0
             }
             
             try:
-                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=30)
+                resp = requests.post(self.ninerouter_url, headers=headers, json=payload, timeout=30)
                 resp.raise_for_status()
-                data = resp.json()
+                
+                resp.encoding = 'utf-8'
+                raw_text = resp.text.strip()
+                # Remove "data: [DONE]" if 9router accidentally appends it
+                if raw_text.endswith("data: [DONE]"):
+                    raw_text = raw_text[:-12].strip()
+                    
+                data = json.loads(raw_text)
                 response_text = data['choices'][0]['message']['content'].strip()
                 if 'usage' in data:
                     tokens = {
@@ -130,8 +140,10 @@ class LLMClient:
                         "completion": data['usage'].get("completion_tokens", 0),
                         "total": data['usage'].get("total_tokens", 0)
                     }
+            except requests.exceptions.HTTPError as e:
+                response_text = f"Error with 9router: {e.response.status_code} - {e.response.text}"
             except Exception as e:
-                response_text = f"Error with OpenRouter: {e}"
+                response_text = f"Error with 9router: {e}"
                 
         self._log_request(model, prompt, system_prompt, response_text, tokens)
         return response_text
