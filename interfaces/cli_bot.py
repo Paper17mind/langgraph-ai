@@ -1,7 +1,7 @@
 import os
 import history_manager
 from logger import log_request
-from agent import agent_executor
+from agent import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 from rich.console import Console
 from rich.panel import Panel
@@ -28,7 +28,7 @@ def run_cli_bot():
                 continue
                 
             # Fetch history
-            past_messages = history_manager.get_history(session_id, limit=10)
+            past_messages = history_manager.get_history(session_id, limit=6)
             messages = []
             for msg in past_messages:
                 if msg["role"] == "user":
@@ -46,9 +46,12 @@ def run_cli_bot():
                 transient=True,
             ) as progress:
                 task = progress.add_task("[cyan]Thinking...", total=None)
+                # Get fresh agent executor (Hot Reload)
+                from agent import global_callbacks
+                agent_executor = get_agent_executor()
                 
                 # Stream the agent's steps
-                for event in agent_executor.stream({"messages": messages}):
+                for event in agent_executor.stream({"messages": messages}, config={"callbacks": global_callbacks}):
                     for key, value in event.items():
                         if key == "agent":
                             # The agent returned something

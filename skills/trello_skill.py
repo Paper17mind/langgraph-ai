@@ -41,15 +41,29 @@ def trello_add_card(list_id: str, card_name: str, desc: str = "") -> str:
 
 @tool
 def trello_get_board(board_id: str) -> str:
-    """Get a JSON summary of a Trello board with the given board ID."""
-    board = _request("GET", f"/boards/{board_id}", {"lists": "all", "list_fields": "name", "cards": "all"})
-    json_data = json.dumps(board, indent=2)
-    if len(json_data) > 1500:
-        filename = f"trello_board_{board_id}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(json_data)
-        return f"✅ Data board sangat besar dan telah disimpan ke file '{filename}'. Anda dapat membaca file tersebut secara manual. (Preview: {json_data[:300]}...)"
-    return json_data
+    """Get a clean text summary of a Trello board (including its lists and cards) with the given board ID."""
+    try:
+        board = _request("GET", f"/boards/{board_id}", {"lists": "all", "list_fields": "name", "cards": "all"})
+        
+        # Create a concise text summary instead of returning raw JSON
+        summary = f"Board Name: {board.get('name', 'Unknown')}\n"
+        summary += f"Board ID: {board.get('id', board_id)}\n\n"
+        
+        lists = board.get('lists', [])
+        cards = board.get('cards', [])
+        
+        for lst in lists:
+            summary += f"📋 List: {lst.get('name')} (ID: {lst.get('id')})\n"
+            list_cards = [c for c in cards if c.get('idList') == lst.get('id')]
+            if not list_cards:
+                summary += "   (Tidak ada kartu)\n"
+            for card in list_cards:
+                summary += f"   - 💳 {card.get('name')} (ID: {card.get('id')})\n"
+            summary += "\n"
+            
+        return summary.strip()
+    except Exception as e:
+        return f"Gagal mengambil board: {e}"
 
 if __name__ == "__main__":
     try:

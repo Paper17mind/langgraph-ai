@@ -2,7 +2,7 @@ import os
 import history_manager
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from agent import agent_executor
+from agent import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -32,6 +32,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     messages.append(HumanMessage(content=text))
     
     try:
+        # Get fresh agent executor (Hot Reload)
+        agent_executor = get_agent_executor()
+        
         # Invoke Agent
         # Note: Depending on deployment, a long agent run might block if not using async invoke (ainvoke)
         # But for simplicity we'll just run it synchronously in the handler.
