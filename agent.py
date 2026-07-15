@@ -55,13 +55,17 @@ def init_llm():
             api_key=ninerouter_key,
             base_url=base_url,
             model=ninerouter_model,
-            temperature=0.0
+            temperature=0.4,
+            timeout=30,
+            max_retries=1
         )
         if groq_key:
             groq_llm = ChatGroq(
                 api_key=groq_key,
                 model_name="llama-3.3-70b-versatile",
-                temperature=0.0
+                temperature=0.4,
+                timeout=30,
+                max_retries=1
             )
             llm = llm.with_fallbacks([groq_llm])
         return llm
@@ -70,7 +74,9 @@ def init_llm():
         return ChatGroq(
             api_key=groq_key,
             model_name="llama-3.3-70b-versatile",
-            temperature=0.0
+            temperature=0.4,
+            timeout=30,
+            max_retries=1
         )
 
     raise ValueError("No LLM API keys configured (9ROUTER_API_KEY or GROQ_API_KEY).")
@@ -85,11 +91,12 @@ Jika kamu diminta melakukan sesuatu dan kamu tidak punya tool yang sesuai, kamu 
 1. Selalu simpan file kode/script baru HANYA di folder `skills/generated/`. DILARANG KERAS membuat file python di folder root (`/`).
 2. Jangan membuat script sekali pakai. Buatlah tool dengan decorator `@tool` yang DINAMIS (reusable) dengan parameter/argumen. Jangan membuat tool yang di-hardcode untuk 1 tugas spesifik (contoh: buat tool `search_email(query, limit)` bukan `cek_email_livin_hari_ini()`).
 3. Jika kamu butuh membuat file temporary atau script cakar-cakaran untuk testing (seperti melalui terminal bash `cat << EOF`), kamu WAJIB menyimpannya di dalam folder `scratch/` (buat foldernya jika belum ada). DILARANG KERAS menaruh file temporary di folder root!
+4. ANTI-DUPLIKASI PROYEK: SEBELUM membuat folder proyek baru, kamu WAJIB mengecek daftar folder yang sudah ada di dalam direktori `projects/`. Gunakan folder yang sudah ada jika proyeknya sama (jangan sampai membuat `local_drop` lalu membuat lagi `local-file-drop`). Setelah membuat proyek baru atau mulai mengerjakannya, kamu WAJIB menyimpannya ke memori jangka panjang menggunakan tool 'remember_fact' (misal: "Proyek Local Drop menggunakan folder projects/local_drop").
 Skill baru tersebut otomatis aktif pada sesi berikutnya menggunakan tool coder_skill.
 If a tool returns an error, read the error carefully and try again to fix the problem.
 PENTING (Efisiensi Token): Jika kamu membutuhkan beberapa data sekaligus, panggillah beberapa tool secara BERSAMAAN (Parallel Tool Calling) dalam satu kali respons. Jangan memanggilnya satu-satu secara berurutan agar menghemat waktu dan request ke LLM.
 Do not stop until you have either succeeded or fundamentally cannot proceed.
-Reply in the same language as the user (default Indonesian)."""
+PENTING: Gunakan bahasa Indonesia yang SANGAT SANTAI, ramah, dan luwes layaknya sedang ngobrol dengan teman (contoh: pakai kata 'aku', 'kamu', 'nih', 'yuk'). JANGAN PERNAH memberikan jawaban berupa poin-poin kaku tanpa basa-basi. HARAM HUKUMNYA membalas dengan kalimat pendek-pendek seperti robot (contoh buruk: "Pilih satu. Buat. Selesai."). Bumbui setiap responmu dengan interaksi manusiawi dan asyik!"""
 
 from langchain_core.callbacks import BaseCallbackHandler
 from logger import log_internal_step
@@ -121,15 +128,34 @@ class AgentLoggingCallback(BaseCallbackHandler):
 
 global_callbacks = [AgentLoggingCallback()]
 
-def get_agent_executor():
+def get_agent_executor(active_project: str = None):
     """
     Creates and returns a new agent executor with dynamically loaded tools.
     This allows for hot-reloading of newly generated skills.
     """
     current_tools = load_all_tools()
+    current_llm = init_llm()
+    
+    # Inject project context if available
+    final_prompt = SYSTEM_PROMPT
+    if active_project:
+        final_prompt += f"\n\n[KONTEKS PROYEK AKTIF]\nKamu sedang bekerja pada proyek: {active_project}\n"
+        final_prompt += f"Semua file/kode untuk proyek ini WAJIB diletakkan di dalam folder `projects/{active_project}/`.\n"
+        final_prompt += "JANGAN menaruh kode aplikasi di folder `skills/`!\n\n"
+        final_prompt += """[CODING GUIDELINES & ARCHITECTURE & WORKFLOW]
+Sebagai Fullstack Engineer profesional untuk proyek ini, patuhi aturan alur kerja (workflow) berikut:
+1. MATANGKAN FSD DULU: Jangan menulis kode aplikasi apapun sebelum FSD (Functional Specification Document) benar-benar matang dan disetujui secara eksplisit oleh user. Diskusikan dan perbaiki FSD bersama user sampai user bilang setuju/oke.
+2. BUAT TASK DI TRELLO: Setelah FSD disetujui, JANGAN langsung coding. Breakdown FSD tersebut menjadi task-task terstruktur dan buatkan task-nya di Trello menggunakan tool yang tersedia.
+3. EKSEKUSI TERSTRUKTUR: Kerjakan coding/implementasi secara terstruktur berdasarkan task yang sudah dibuat di Trello. Ambil task, kerjakan, lalu update statusnya. Ini agar pekerjaan rapi dan tidak bolak-balik edit file sembarangan.
+4. ATURAN TEKNIS (BACKEND): Wajib mengaktifkan `CORSMiddleware` (allow_origins=["*"]) agar tidak diblokir oleh Frontend. Kembalikan data dalam format JSON terstruktur.
+5. ATURAN TEKNIS (FRONTEND): SEJAK KODE PERTAMA DITULIS (DRAFT AWAL), UI WAJIB menggunakan TailwindCSS CDN dengan desain yang SANGAT PREMIUM, modern, rapi (padding & margin pas), responsif (mobile-friendly), dan elegan (efek hover, transisi, bayangan/shadow). DILARANG KERAS membuat HTML polosan/jelek sebagai permulaan! Wajib juga menangani state Loading dan Error saat fetch API.
+6. SINKRONISASI DATA (FRONTEND-BACKEND): Kamu WAJIB memastikan struktur data JSON yang dikembalikan oleh Backend SAMA PERSIS dengan yang di-*parsing* oleh Frontend. Jika Backend me-*return* objek `{"files": [...] }`, Frontend WAJIB memanggil `res.json().files` dan tidak boleh langsung menganggapnya sebagai *array*. Selalu verifikasi *keys* dan tipe data antar-file sebelum menyimpannya!
+7. UNIT TESTING WAJIB: Setiap kali kamu menulis atau mengubah logika kode inti (khususnya backend), kamu WAJIB sekalian membuatkan *Unit Test*-nya (misalnya menggunakan pytest atau unittest). Jangan pernah memberikan kode baru tanpa tes otomatis yang membuktikan bahwa kodemu berjalan dengan benar!
+8. DOKUMENTASI BUG & ERROR: Setiap kali kamu menemui *error/bug* dalam kodemu dan berhasil menemukan solusinya, kamu WAJIB mencatat masalah beserta solusi benarnya ke dalam memori menggunakan tool `remember_fact`. Jangan sampai kamu mengulangi kesalahan konyol yang sama dua kali!
+"""
     
     return create_react_agent(
-        model=llm.with_config(callbacks=global_callbacks),
+        model=current_llm.with_config(callbacks=global_callbacks),
         tools=current_tools,
-        prompt=SystemMessage(content=SYSTEM_PROMPT)
+        prompt=SystemMessage(content=final_prompt)
     )

@@ -42,5 +42,22 @@ def get_history(session_id: str, limit: int = 10):
     conn.close()
     return [{"role": row[0], "content": row[1]} for row in rows]
 
+def get_all_sessions(prefix: str) -> list:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT session_id FROM messages WHERE session_id LIKE ?
+    ''', (prefix + '%',))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    sessions = []
+    for row in rows:
+        session_id = row[0]
+        # Remove prefix
+        if session_id.startswith(prefix):
+            sessions.append(session_id[len(prefix):])
+    return sessions
+
 # Initialize database on import
 init_db()

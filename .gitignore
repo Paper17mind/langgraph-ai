@@ -1,8 +1,10 @@
 logs/*
 __pycache__/
 .env
-history.db
+*.db
 file_baru.txt
 skills/__pycache__/
 interfaces/__pycache__/
 memory_store/*
+scratch/*
+projects/*

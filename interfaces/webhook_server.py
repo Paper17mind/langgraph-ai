@@ -45,8 +45,9 @@ async def receive_webhook(source: str, request: Request):
         # Invoke agent
         messages = [HumanMessage(content=prompt)]
         # Get fresh agent executor (Hot Reload)
+        from agent import global_callbacks
         agent_executor = get_agent_executor()
-        result = agent_executor.invoke({"messages": messages})
+        result = agent_executor.invoke({"messages": messages}, config={"callbacks": global_callbacks})
         
         ai_response = result["messages"][-1].content
         
