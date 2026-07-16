@@ -1,7 +1,9 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
+MEMORY_STORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory_store")
+os.makedirs(MEMORY_STORE_DIR, exist_ok=True)
+DB_PATH = os.path.join(MEMORY_STORE_DIR, "history.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)

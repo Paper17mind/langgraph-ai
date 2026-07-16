@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage
 # Load tools and agent
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import get_agent_executor
+from multi_agent import get_agent_executor
 
 load_dotenv()
 
@@ -47,7 +47,10 @@ async def receive_webhook(source: str, request: Request):
         # Get fresh agent executor (Hot Reload)
         from agent import global_callbacks
         agent_executor = get_agent_executor()
-        result = agent_executor.invoke({"messages": messages}, config={"callbacks": global_callbacks})
+        result = agent_executor.invoke(
+            {"messages": messages}, 
+            config={"callbacks": global_callbacks, "configurable": {"thread_id": f"webhook_{source}"}}
+        )
         
         ai_response = result["messages"][-1].content
         

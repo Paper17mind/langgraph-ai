@@ -2,7 +2,7 @@ import os
 import sys
 import history_manager
 from logger import log_request
-from agent import get_agent_executor
+from multi_agent import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 from rich.console import Console
 from rich.panel import Panel
@@ -140,32 +140,27 @@ def run_cli_bot():
                 agent_executor = get_agent_executor(active_project=active_project)
                 
                 # Stream the agent's steps
-                for event in agent_executor.stream({"messages": messages}, config={"callbacks": global_callbacks}):
+                for event in agent_executor.stream(
+                    {"messages": messages}, 
+                    config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}}
+                ):
                     for key, value in event.items():
-                        if key == "agent":
-                            # The agent returned something
+                        # key is the node name (e.g., 'Supervisor', 'Coder', 'PM', 'QC')
+                        progress.console.print(f"[bold magenta]🤖 Node Finished:[/] {key}")
+                        
+                        if "next" in value:
+                            progress.console.print(f"[bold blue]🔀 Routing to:[/] {value['next']}")
+                            
+                        if "messages" in value:
                             agent_msgs = value.get("messages", [])
+                            if not isinstance(agent_msgs, list):
+                                agent_msgs = [agent_msgs]
+                                
                             for msg in agent_msgs:
-                                # Check if agent is calling a tool
-                                if getattr(msg, "tool_calls", None):
-                                    for tool_call in msg.tool_calls:
-                                        tool_name = tool_call.get("name")
-                                        args = tool_call.get("args", {})
-                                        # Temporarily print the tool call outside the progress
-                                        progress.console.print(f"[bold yellow]🛠️  Calling Tool:[/] {tool_name}\n[dim]Args: {args}[/dim]")
-                                        progress.update(task, description=f"[cyan]Executing {tool_name}...")
-                                        
-                                # If it has content, it might be the final text
+                                # Update final message if it's an AI message with content
                                 if getattr(msg, "content", "") and not getattr(msg, "tool_calls", None):
+                                    # Since Supervisor is the brain, we often get the final text from the last node
                                     final_message = msg.content
-                                    
-                        elif key == "tools":
-                            # A tool finished executing
-                            tool_msgs = value.get("messages", [])
-                            for msg in tool_msgs:
-                                content_preview = str(msg.content).replace('\n', ' ')[:100]
-                                progress.console.print(f"[bold green]✅ Tool '{getattr(msg, 'name', 'unknown')}' finished.[/]\n[dim]Output: {content_preview}...[/dim]")
-                            progress.update(task, description="[cyan]Analyzing results...")
             
             # Save User Message and Assistant Response
             history_manager.add_message(session_id, "user", text)

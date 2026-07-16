@@ -2,7 +2,7 @@ import os
 import history_manager
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from agent import get_agent_executor
+from multi_agent import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -145,7 +145,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Invoke Agent
         # Note: Depending on deployment, a long agent run might block if not using async invoke (ainvoke)
         # But for simplicity we'll just run it synchronously in the handler.
-        result = agent_executor.invoke({"messages": messages}, config={"callbacks": global_callbacks})
+        result = agent_executor.invoke(
+            {"messages": messages}, 
+            config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}}
+        )
         response = result["messages"][-1].content
     except Exception as e:
         response = f"Error executing agent: {e}"
