@@ -1,9 +1,9 @@
 import os
 import sys
 import json
-import history_manager
-from logger import log_request
-from multi_agent import get_agent_executor
+from core import history_manager
+from core.logger import log_request
+from core.agent import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 from rich.console import Console
 from rich.panel import Panel
@@ -158,7 +158,7 @@ def run_cli_bot():
             ) as progress:
                 task = progress.add_task("[cyan]Thinking...", total=None)
                 # Get fresh agent executor (Hot Reload)
-                from agent import global_callbacks
+                from core.agent import global_callbacks
                 agent_executor = get_agent_executor(active_project=active_project)
                 
                 # Stream the agent's steps

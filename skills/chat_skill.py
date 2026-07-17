@@ -1,5 +1,5 @@
-from llm_client import llm
-import history_manager
+from core.llm_client import llm
+from core import history_manager
 
 def execute(user_message: str, session_id: str = "default") -> str:
     """

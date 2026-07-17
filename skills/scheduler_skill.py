@@ -1,6 +1,6 @@
 import os
 from langchain.tools import tool
-import scheduler_db
+from core import scheduler_db
 
 @tool
 def schedule_task(task_description: str, delay_seconds: int) -> str:

@@ -1,9 +1,9 @@
 import os
-import history_manager
-import scheduler_db
+from core import history_manager
+from core import scheduler_db
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from multi_agent import get_agent_executor
+from core.agent import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 
 user_sessions = {}
@@ -138,17 +138,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     try:
         # Get fresh agent executor (Hot Reload)
-        from agent import global_callbacks
+        from core.agent import global_callbacks
         agent_executor = get_agent_executor(active_project=active_project)
         
         # Invoke Agent
         # Note: Depending on deployment, a long agent run might block if not using async invoke (ainvoke)
-        # But for simplicity we'll just run it synchronously in the handler.
-        result = agent_executor.invoke(
+        from rich.console import Console
+        from rich.panel import Panel
+        console = Console()
+        console.print(f"\n[bold green]=== Processing Telegram Request from {session_id} ===[/]")
+        
+        final_message = ""
+        for event in agent_executor.stream(
             {"messages": messages}, 
             config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
-        )
-        response = result["messages"][-1].content
+        ):
+            for key, value in event.items():
+                console.print(f"[bold magenta]🤖 Node Finished:[/] {key}")
+                
+                if "next" in value:
+                    console.print(f"[bold blue]🔀 Routing to:[/] {value['next']}")
+                    
+                if "messages" in value:
+                    agent_msgs = value.get("messages", [])
+                    if not isinstance(agent_msgs, list):
+                        agent_msgs = [agent_msgs]
+                        
+                    for m in agent_msgs:
+                        if hasattr(m, 'content') and m.content:
+                            final_message = m.content
+                            console.print(Panel(m.content[:500] + ("..." if len(m.content) > 500 else ""), title=f"Output from {key}", border_style="green"))
+                            
+                        if hasattr(m, 'tool_calls') and m.tool_calls:
+                            for tc in m.tool_calls:
+                                console.print(f"[bold yellow]🛠️ Tool Call:[/] {tc['name']}")
+                                
+        response = final_message
     except Exception as e:
         response = f"Error executing agent: {e}"
         

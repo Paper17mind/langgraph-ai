@@ -1,11 +1,14 @@
 import os
 import uuid
+
+# Suppress HuggingFace logging spam before importing HuggingFaceEmbeddings
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-
-# Define the local path where ChromaDB will store its data
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEMORY_STORE_PATH = os.path.join(BASE_DIR, "memory_store")
+MEMORY_STORE_PATH = os.path.join(BASE_DIR, "data", "memory_store")
 
 class MemoryDB:
     def __init__(self):

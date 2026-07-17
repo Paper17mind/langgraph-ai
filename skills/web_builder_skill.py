@@ -6,7 +6,7 @@ import sys
 
 # Add root directory to sys.path to import utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from llm_client import llm
+from core.llm_client import llm
 from utils.text_helper import truncate_or_save
 
 # Load variables directly from environment (which was loaded by main/agent)
