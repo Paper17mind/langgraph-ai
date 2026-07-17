@@ -15,7 +15,12 @@ class MemoryDB:
     def _init_db(self):
         """Lazily initialize the embedding model and vector store only when needed."""
         if self._vector_store is None:
-            self._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+            # Set to offline mode since we already have the model cached locally
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            self._embeddings = HuggingFaceEmbeddings(
+                model_name="all-MiniLM-L6-v2",
+                model_kwargs={"local_files_only": True}
+            )
             self._vector_store = Chroma(
                 collection_name="ai_long_term_memory",
                 embedding_function=self._embeddings,

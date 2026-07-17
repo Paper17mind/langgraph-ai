@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import history_manager
 from logger import log_request
 from multi_agent import get_agent_executor
@@ -13,11 +14,27 @@ from rich import print as rprint
 
 console = Console()
 
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli_sessions.json")
+
+def load_configs():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_configs(configs):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(configs, f)
+
 def run_cli_bot():
     console.print(Panel.fit("🤖 AI Assistant CLI Mode Started\nType [bold red]exit[/] or [bold red]quit[/] to close", title="Welcome", border_style="green"))
     
+    configs = load_configs()
     active_session = "default"
-    active_project = None
+    active_project = configs.get(active_session, None)
+    
+    if active_project:
+        console.print(f"[bold dim]Memuat proyek terakhir untuk sesi '{active_session}': {active_project}[/]")
     
     while True:
         try:
@@ -37,6 +54,8 @@ def run_cli_bot():
                 if cmd == "/project":
                     if len(command_parts) > 1:
                         active_project = command_parts[1].lower()
+                        configs[active_session] = active_project
+                        save_configs(configs)
                         console.print(f"[bold green]✅ Proyek aktif disetel ke:[/] {active_project}")
                     else:
                         # List projects
@@ -57,7 +76,10 @@ def run_cli_bot():
                 elif cmd == "/session":
                     if len(command_parts) > 1:
                         active_session = command_parts[1].lower()
+                        active_project = configs.get(active_session, None)
                         console.print(f"[bold green]✅ Berpindah ke sesi:[/] {active_session}")
+                        if active_project:
+                            console.print(f"[bold dim]Memuat proyek terakhir: {active_project}[/]")
                     else:
                         # List sessions
                         sessions = history_manager.get_all_sessions("cli_")
@@ -142,7 +164,7 @@ def run_cli_bot():
                 # Stream the agent's steps
                 for event in agent_executor.stream(
                     {"messages": messages}, 
-                    config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}}
+                    config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
                 ):
                     for key, value in event.items():
                         # key is the node name (e.g., 'Supervisor', 'Coder', 'PM', 'QC')
@@ -157,7 +179,17 @@ def run_cli_bot():
                                 agent_msgs = [agent_msgs]
                                 
                             for msg in agent_msgs:
-                                # Update final message if it's an AI message with content
+                                # Print text content
+                                content_preview = str(getattr(msg, "content", "")).strip()
+                                if content_preview:
+                                    progress.console.print(f"   [dim]{content_preview}[/]")
+                                    
+                                # Print tool calls if any
+                                tool_calls = getattr(msg, "tool_calls", [])
+                                if tool_calls:
+                                    for tool in tool_calls:
+                                        progress.console.print(f"   [dim cyan]🛠️  Calling Tool: {tool.get('name', 'unknown')}({tool.get('args', {})})[/]")
+                                    
                                 if getattr(msg, "content", "") and not getattr(msg, "tool_calls", None):
                                     # Since Supervisor is the brain, we often get the final text from the last node
                                     final_message = msg.content

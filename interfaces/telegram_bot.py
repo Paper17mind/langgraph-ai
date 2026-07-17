@@ -1,9 +1,9 @@
 import os
 import history_manager
+import scheduler_db
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from multi_agent import get_agent_executor
-from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.messages import HumanMessage, AIMessage
 
 user_sessions = {}
@@ -110,26 +110,25 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = str(update.message.from_user.id)
-    allowed_user = os.getenv("ALLOWED_USER_ID")
+    if not await check_auth(update): return
     
-    if allowed_user and user_id != allowed_user:
-        await update.message.reply_text("Unauthorized user.")
-        return
-
     text = update.message.text
+    user_id = str(update.message.from_user.id)
     
-    # Send "typing" action
+    # Session ID is just the user ID for simplicity in telegram
+    session_id = user_sessions.get(user_id, f"tg_{user_id}")
+    active_project = user_projects.get(user_id, None)
+    
+    # Inject current session ID for tools (like scheduler)
+    os.environ["CURRENT_SESSION_ID"] = session_id
+    
+    # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    active_session = user_sessions.get(user_id, "default")
-    active_project = user_projects.get(user_id, None)
-    session_id = f"telegram_{user_id}_{active_session}"
-    
-    # Fetch history
-    past_messages = history_manager.get_history(session_id, limit=10)
+    # Format history
+    history = history_manager.get_history(session_id, limit=20)
     messages = []
-    for msg in past_messages:
+    for msg in history:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
         else:
@@ -147,7 +146,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # But for simplicity we'll just run it synchronously in the handler.
         result = agent_executor.invoke(
             {"messages": messages}, 
-            config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}}
+            config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
         )
         response = result["messages"][-1].content
     except Exception as e:
@@ -163,6 +162,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         response = response[:4000] + "\n...[truncated]"
         
     await update.message.reply_text(response, parse_mode=None)
+
+async def check_schedules_job(context: ContextTypes.DEFAULT_TYPE):
+    """Background job to check and trigger scheduled tasks."""
+    pending_tasks = scheduler_db.get_pending_schedules()
+    for task in pending_tasks:
+        try:
+            # Task session_id might be "tg_12345", extract numeric ID if needed
+            chat_id = task["session_id"].replace("tg_", "")
+            message = f"⏰ <b>PENGINGAT OTOMATIS:</b>\n\n{task['task']}"
+            await context.bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")
+            scheduler_db.mark_schedule_done(task["id"])
+        except Exception as e:
+            print(f"Failed to send scheduled task {task['id']}: {e}")
 
 def run_telegram_bot():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -182,6 +194,9 @@ def run_telegram_bot():
     
     # Register normal text handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Register background scheduler poller
+    application.job_queue.run_repeating(check_schedules_job, interval=10, first=5)
     
     print("Starting Telegram Bot (Polling)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
