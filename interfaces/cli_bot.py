@@ -159,7 +159,7 @@ def run_cli_bot():
                 task = progress.add_task("[cyan]Thinking...", total=None)
                 # Get fresh agent executor (Hot Reload)
                 from core.agent import global_callbacks
-                agent_executor = get_agent_executor(active_project=active_project)
+                agent_executor = get_agent_executor(active_project=active_project, user_query=text)
                 
                 # Stream the agent's steps
                 for event in agent_executor.stream(

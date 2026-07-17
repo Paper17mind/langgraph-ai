@@ -119,8 +119,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     session_id = user_sessions.get(user_id, f"tg_{user_id}")
     active_project = user_projects.get(user_id, None)
     
-    # Inject current session ID for tools (like scheduler)
+    # Inject current session ID and chat ID for tools (like scheduler)
     os.environ["CURRENT_SESSION_ID"] = session_id
+    os.environ["CURRENT_CHAT_ID"] = user_id
     
     # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
@@ -138,8 +139,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     try:
         # Get fresh agent executor (Hot Reload)
+        # Create executor dynamically
         from core.agent import global_callbacks
-        agent_executor = get_agent_executor(active_project=active_project)
+        agent_executor = get_agent_executor(active_project=active_project, user_query=text)
         
         # Invoke Agent
         # Note: Depending on deployment, a long agent run might block if not using async invoke (ainvoke)
@@ -173,6 +175,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                             for tc in m.tool_calls:
                                 console.print(f"[bold yellow]🛠️ Tool Call:[/] {tc['name']}")
                                 
+        if not final_message:
+            final_message = "⚠️ Maaf, agent tidak memberikan respons (pesan kosong). Silakan coba lagi."
+            
         response = final_message
     except Exception as e:
         response = f"Error executing agent: {e}"
@@ -186,8 +191,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if len(response) > 4000:
         response = response[:4000] + "\n...[truncated]"
         
-    await update.message.reply_text(response, parse_mode=None)
-
+    try:
+        await update.message.reply_text(response, parse_mode="Markdown")
+    except Exception:
+        # Fallback to plain text if Markdown parsing fails (e.g. unclosed tags)
+        await update.message.reply_text(response, parse_mode=None)
 async def check_schedules_job(context: ContextTypes.DEFAULT_TYPE):
     """Background job to check and trigger scheduled tasks."""
     pending_tasks = scheduler_db.get_pending_schedules()
