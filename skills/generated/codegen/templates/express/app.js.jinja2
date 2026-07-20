@@ -1,0 +1,16 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+// Serve static frontend HTML files
+app.use(express.static(path.join(__dirname, '../frontend')));
+
+{% for route in routes %}
+app.use('{{ route.mount_path }}', require('{{ route.require_path }}'));
+{% endfor %}
+
+module.exports = app;

@@ -11,3 +11,4 @@ scratch/*
 projects/*
 data/sample-schema.json
 data/memory_store/*
+test_*

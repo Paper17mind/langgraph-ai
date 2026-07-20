@@ -1,0 +1,45 @@
+{% if model_name %}const {{ model_name }} = require('../models/{{ model_name }}');{% endif %}
+
+{% for fn in functions %}
+exports.{{ fn.name }} = async (req, res) => {
+{% if fn.ai_inject_logic and fn.ai_inject_logic|lower != 'standard' %}
+  // TODO: ai_inject_logic — {{ fn.ai_inject_logic }}
+  res.status(501).json({ message: 'Not yet implemented' });
+{% elif fn.action_code %}
+{{ fn.action_code | indent(2, True) }}
+{% else %}
+  {# Standard CRUD #}
+  {% if fn.name == 'index' %}
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+  const { count, rows } = await {{ model_name }}.findAndCountAll({ limit, offset });
+  res.json({
+    total: count,
+    page,
+    limit,
+    total_pages: Math.ceil(count / limit),
+    data: rows
+  });
+  {% elif fn.name == 'store' %}
+  const record = await {{ model_name }}.create(req.body);
+  res.status(201).json(record);
+  {% elif fn.name == 'show' %}
+  const record = await {{ model_name }}.findByPk(req.params.id);
+  if (!record) return res.status(404).json({ message: 'Not found' });
+  res.json(record);
+  {% elif fn.name == 'update' %}
+  const record = await {{ model_name }}.findByPk(req.params.id);
+  if (!record) return res.status(404).json({ message: 'Not found' });
+  await record.update(req.body);
+  res.json(record);
+  {% elif fn.name == 'destroy' %}
+  const record = await {{ model_name }}.findByPk(req.params.id);
+  if (!record) return res.status(404).json({ message: 'Not found' });
+  await record.destroy();
+  res.status(204).send();
+  {% endif %}
+{% endif %}
+};
+
+{% endfor %}

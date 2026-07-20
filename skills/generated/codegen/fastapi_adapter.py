@@ -93,7 +93,8 @@ class FastAPIAdapter(BaseAdapter):
                 elif rel["type"] == "belongsTo":
                     rname = rel["model"]
                     fk = rel["foreign_key"]
-                    col_lines.append(f"    {fk} = Column(Integer, ForeignKey('{self.models.get(rname, {}).get(\"table\", rname.lower()+\"s\")}.id'))")
+                    related_table = self.models.get(rname, {}).get("table", rname.lower() + "s")
+                    col_lines.append(f"    {fk} = Column(Integer, ForeignKey('{related_table}.id'))")
                     col_lines.append(f"    {rname.lower()} = relationship('{rname}', back_populates='{name.lower()}s')")
 
             cols_str = "\n".join(col_lines)
@@ -129,7 +130,7 @@ def get_db():
     finally:
         db.close()
 """.strip()
-        return filesi
+        return files
 
     # ==================================================================
     # Phase 1 — Migrations (Alembic-style comment only)

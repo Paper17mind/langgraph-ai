@@ -9,12 +9,7 @@ from utils.text_helper import truncate_or_save
 
 @tool
 def execute_system_command(command: str) -> str:
-    """
-    Executes a bash/system command on the local machine and returns the output or error.
-    Use this to run terminal commands (e.g., ls, df, curl, etc.).
-    IMPORTANT: Do NOT use this to run heavy installations like `playwright install` or `docker pull`.
-    IMPORTANT: If using curl with URLs containing '&', you MUST wrap the URL in quotes!
-    """
+    """Execute bash command."""
     
     # Deteksi perintah instalasi berat yang sudah pasti lama
     heavy_commands = [

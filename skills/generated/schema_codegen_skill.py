@@ -39,13 +39,7 @@ def _write_files(files: dict[str, str], output_dir: str) -> list[str]:
 
 @tool
 def read_project_schema(schema_path: str) -> str:
-    """
-    Baca dan tampilkan ringkasan dari file project schema JSON.
-    Menampilkan daftar models, jumlah routes, jumlah controllers, dan fungsi mana saja
-    yang memiliki ai_inject_logic (akan diproses di Phase 2).
-    Gunakan tool ini untuk memvalidasi schema sebelum generate kode.
-    Parameter: schema_path = path ke file .json (absolut atau relatif ke root project).
-    """
+    """Read and summarize project JSON schema."""
     try:
         path = _resolve_path(schema_path)
         schema = _load_schema(path)
@@ -93,21 +87,7 @@ def generate_project_from_schema(
     output_dir: str,
     ai_delay_seconds: int = 3,
 ) -> str:
-    """
-    Generate project code dari file schema JSON secara dua fase:
-    - Phase 1 (sinkron, instan): Models, Migrations, Routes, Controllers (standard), Tests (standard)
-    - Phase 2 (background, async): Fungsi dengan ai_inject_logic di-generate oleh LLM
-      dengan delay antar job untuk menghindari TPM rate limit.
-      Setiap job selesai akan mengirim notifikasi ke Telegram.
-
-    Parameter:
-      schema_path      : Path ke file schema JSON (absolut atau relatif ke root project)
-      framework        : 'laravel', 'fastapi', atau 'express'
-      output_dir       : Folder output untuk file yang di-generate (absolut atau relatif)
-      ai_delay_seconds : Delay (detik) antar LLM call di Phase 2 (default: 3)
-
-    Contoh: generate_project_from_schema('projects/perpus/schema.json', 'laravel', 'projects/perpus/laravel/', 5)
-    """
+    """Generate Express/Laravel/FastAPI project from JSON schema."""
     try:
         schema_path = _resolve_path(schema_path)
         output_dir = _resolve_path(output_dir)
@@ -133,6 +113,13 @@ def generate_project_from_schema(
         all_written += _write_files(adapter.generate_routes(), output_dir)
         all_written += _write_files(adapter.generate_controllers(), output_dir)
         all_written += _write_files(adapter.generate_tests_phase1(), output_dir)
+
+        # ---------------------------------------------------------------
+        # Generate Frontend
+        # ---------------------------------------------------------------
+        print(f"[codegen] Generating frontend html files...")
+        frontend_adapter = ADAPTERS["frontend_html"](schema, output_dir)
+        all_written += _write_files(frontend_adapter.generate_all(), output_dir)
 
         phase1_count = len(all_written)
 

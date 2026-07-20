@@ -421,19 +421,18 @@ def nama_tool(param1: str, param2: int = 10) -> str:
             "kode", "coding", "fitur", "bug", "implementasi", "deploy",
             "backend", "frontend", "api", "task", "tasks", "fsd", "test",
             "testing", "error", "endpoint", "database", "ui", "desain",
+            "project", "proyek", "schema", "skema", "struktur"
         },
         "full": """[CODING GUIDELINES & ARCHITECTURE & WORKFLOW]
-Sebagai Fullstack Engineer profesional untuk proyek ini, patuhi aturan alur kerja (workflow) berikut:
-1. MATANGKAN FSD DULU: Jangan menulis kode aplikasi apapun sebelum FSD (Functional Specification Document) benar-benar matang dan disetujui secara eksplisit oleh user. Diskusikan dan perbaiki FSD bersama user sampai user bilang setuju/oke.
-2. BUAT TASK LOKAL: Setelah FSD disetujui, JANGAN langsung coding. Breakdown FSD tersebut menjadi task-task terstruktur dan catat ke dalam file `tasks.md` atau `tasks.json` di folder proyek. Buat checklist status pengerjaan yang jelas.
-3. EKSEKUSI TERSTRUKTUR: Kerjakan coding/implementasi secara terstruktur berdasarkan task yang sudah dibuat di `tasks.md` / `tasks.json`. Ambil task, kerjakan, lalu centang/update statusnya.
-4. ATURAN TEKNIS (BACKEND): Wajib mengaktifkan `CORSMiddleware` (allow_origins=["*"]) agar tidak diblokir oleh Frontend. Kembalikan data dalam format JSON terstruktur.
-5. ATURAN TEKNIS (FRONTEND): SEJAK KODE PERTAMA DITULIS (DRAFT AWAL), UI WAJIB menggunakan TailwindCSS CDN dengan desain yang SANGAT PREMIUM, modern, rapi, responsif, dan elegan. DILARANG KERAS membuat HTML polosan/jelek sebagai permulaan! Wajib juga menangani state Loading dan Error saat fetch API.
-6. SINKRONISASI DATA (FRONTEND-BACKEND): Struktur data JSON Backend WAJIB sama persis dengan yang di-parsing Frontend.
-7. UNIT TESTING WAJIB: Setiap perubahan logika kode inti (khususnya backend) WAJIB disertai Unit Test (pytest/unittest).
-8. DOKUMENTASI BUG & ERROR: Setiap bug yang berhasil dipecahkan WAJIB dicatat ke memori via `remember_fact`.
-9. CEK PEDOMAN LOKAL: Gunakan `list_guidelines` dan `read_guideline` sebelum menulis kode/arsitektur baru.""",
-        "short": "[Ringkasan] Proyek ini WAJIB ikuti workflow: FSD disetujui dulu -> breakdown ke `tasks.md` -> kerja terstruktur per task -> backend pakai CORSMiddleware -> frontend Tailwind premium sejak draft awal -> struktur JSON BE/FE sinkron -> WAJIB unit test tiap ubah logika inti -> bug yang selesai WAJIB dicatat ke memori -> cek `list_guidelines`/`read_guideline` sebelum desain baru.",
+Sebagai Fullstack Engineer profesional, PATUHI ALUR KERJA SANGAT KETAT ini. Pelanggaran terhadap urutan ini SANGAT DILARANG:
+1. DISKUSI & FSD: Jika user baru mengajak diskusi konsep/ide, JANGAN membuat folder project, JANGAN meng-generate kode, dan JANGAN membuat file apa pun. Fokus berdiskusi untuk merumuskan FSD (Functional Specification Document) secara tekstual sampai user bilang SETUJU.
+2. BUAT SCHEMA JSON: Setelah FSD disetujui, JANGAN langsung coding. Kamu WAJIB mendesain struktur project berbasis Schema JSON (models, relations, routes, controllers, actions). Simpan/tulis schema ini ke dalam file JSON yang sesuai.
+3. GENERATE CODE: Setelah file schema JSON siap dan disetujui, JANGAN menulis kode satu per satu secara manual! Selalu gunakan tool `generate_project_from_schema` untuk membuat boilerplate dan struktur aplikasi (tersedia framework: laravel, fastapi, express).
+4. CUSTOM LOGIC: Hanya tulis/edit kode secara manual jika ada logika spesifik yang perlu disesuaikan setelah generator berjalan.
+5. ATURAN TEKNIS (FRONTEND): UI WAJIB menggunakan TailwindCSS CDN dengan desain SANGAT PREMIUM.
+6. UNIT TESTING: Setiap fungsi custom WAJIB diuji (pytest/unittest/Pest/Jest).
+7. DOKUMENTASI: Bug/Solusi WAJIB dicatat ke memori via `remember_fact`.""",
+        "short": "[Ringkasan Workflow]: 1. Diskusi konsep dulu (JANGAN bikin folder/file/kode), 2. Susun FSD, 3. Buat file `schema.json`, 4. Pakai tool `generate_project_from_schema` untuk generate kode. DILARANG KERAS tulis kode manual atau bikin folder/project sebelum schema JSON disetujui.",
     },
 }
 

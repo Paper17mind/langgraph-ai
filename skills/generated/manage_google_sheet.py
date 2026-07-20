@@ -5,16 +5,7 @@ from google.oauth2.service_account import Credentials
 
 @tool
 def manage_google_sheet(spreadsheet_id: str, action: str, worksheet_name: str = "Sheet1", cell_range: str = None, values: list = None) -> str:
-    """
-    Akses dan modifikasi Google Sheets.
-    
-    Args:
-        spreadsheet_id (str): ID dari URL Google Sheet.
-        action (str): "read", "update", atau "append".
-        worksheet_name (str): Nama tab sheet (default: Sheet1).
-        cell_range (str, optional): Rentang sel, misal "A1:C10".
-        values (list, optional): List of lists untuk update/append. Misal [["A", "B"]].
-    """
+    """Access or modify Google Sheets."""
     cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if not cred_path or not os.path.exists(cred_path):
         return f"Error: Kredensial tidak ditemukan di {cred_path}. Set GOOGLE_APPLICATION_CREDENTIALS di .env."

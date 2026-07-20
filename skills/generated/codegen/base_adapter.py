@@ -109,10 +109,13 @@ class BaseAdapter(ABC):
             for fn in ctrl.get("functions", []):
                 logic = fn.get("ai_inject_logic")
                 if logic:
-                    jobs.append({
-                        "controller": ctrl["name"],
-                        "function_name": fn["name"],
-                        "ai_inject_logic": logic,
+                    if str(logic).lower() == "standard" and "fastapi" not in type(self).__name__.lower():
+                        pass # Native support available, skip LLM inject
+                    else:
+                        jobs.append({
+                            "controller": ctrl["name"],
+                            "function_name": fn["name"],
+                            "ai_inject_logic": logic,
                         "model_name": model_name,
                     })
         return jobs

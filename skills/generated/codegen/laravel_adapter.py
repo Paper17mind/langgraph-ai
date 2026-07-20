@@ -256,7 +256,7 @@ Route::middleware('auth:sanctum')->group(function () {{
                 fn_type = fn.get("type", "standard")
                 ai_logic = fn.get("ai_inject_logic")
 
-                if ai_logic:
+                if ai_logic and str(ai_logic).lower() != "standard":
                     # Placeholder for Phase 2
                     body = (
                         f"        // TODO: ai_inject_logic — {ai_logic}\n"
@@ -435,8 +435,9 @@ class {ctrl_name} extends Controller
                 path = route["path"].replace("{id}", "1")
                 access = route.get("access", {})
                 if access.get("require_auth"):
+                    route_path = route.get("path", "")
                     test_cases.append(
-                        f"test('unauthenticated cannot {method} {route[\"path\"]}', function () {{\n"
+                        f"test('unauthenticated cannot {method} {route_path}', function () {{\n"
                         f"    $response = $this->{method}Json('/api{path}');\n"
                         f"    $response->assertUnauthorized();\n"
                         f"}});"

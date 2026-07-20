@@ -172,30 +172,43 @@ def _inject_code(adapter, output_dir: str, job: dict, generated_code: str):
 
 def _append_test(adapter, output_dir, framework, ctrl, fn_name, model_name, code):
     """Generate and append a test case for the AI-injected function."""
+    if framework not in ["laravel", "fastapi", "express"]:
+        return
+
+    prompt = f"""You are writing a unit test for a {framework} API endpoint.
+Controller: {ctrl}
+Function: {fn_name}
+Model: {model_name}
+
+Here is the generated backend logic:
+```
+{code}
+```
+
+Write ONLY the specific test case block (no markdown, no explanations).
+For Express use Jest+Supertest (`test(...)`).
+For Laravel use Pest/PHPUnit (`test(...)` or `public function test_...`).
+For FastAPI use Pytest (`def test_...()`).
+"""
+    test_case = _call_llm(prompt)
+    
+    # Fallback jika LLM error
+    if "LLM error:" in test_case or not test_case.strip():
+        if framework == "laravel":
+            test_case = f"\n\ntest('{ctrl}.{fn_name}: ai-generated logic test', function () {{\n    // Auto-generated fallback test for: {fn_name}\n    $this->markTestIncomplete('Review generated logic and fill in assertions.');\n}});"
+        elif framework == "fastapi":
+            test_case = f"\n\ndef test_{ctrl.lower()}_{fn_name}():\n    # Auto-generated fallback test for: {fn_name}\n    pass  # TODO: fill assertions\n"
+        elif framework == "express":
+            test_case = f"\n  test('{ctrl}.{fn_name} - ai generated', async () => {{\n    // TODO: fill assertions for {fn_name}\n  }});\n"
+
+    test_case = f"\n\n{test_case}\n"
+
     if framework == "laravel":
         test_path = os.path.join(output_dir, f"tests/Feature/{ctrl}Test.php")
-        test_case = (
-            f"\n\ntest('{ctrl}.{fn_name}: ai-generated logic test', function () {{\n"
-            f"    // Auto-generated test for: {fn_name}\n"
-            f"    $this->markTestIncomplete('Review generated logic and fill in assertions.');\n"
-            f"}});"
-        )
     elif framework == "fastapi":
         test_path = os.path.join(output_dir, "tests/test_api.py")
-        test_case = (
-            f"\n\ndef test_{ctrl.lower()}_{fn_name}():\n"
-            f"    # Auto-generated test for: {fn_name}\n"
-            f"    pass  # TODO: fill assertions\n"
-        )
     elif framework == "express":
         test_path = os.path.join(output_dir, "tests/api.test.js")
-        test_case = (
-            f"\n  test('{ctrl}.{fn_name} - ai generated', async () => {{\n"
-            f"    // TODO: fill assertions for {fn_name}\n"
-            f"  }});\n"
-        )
-    else:
-        return
 
     if os.path.exists(test_path):
         with open(test_path, "a", encoding="utf-8") as f:
@@ -237,7 +250,7 @@ def run_worker(delay_seconds: int = 3):
                 import json as _json
                 with open(schema_path, "r") as f:
                     schema = _json.load(f)
-                from codegen import ADAPTERS
+                from skills.generated.codegen import ADAPTERS
                 adapter = ADAPTERS[framework](schema, output_dir)
                 adapter_cache[cache_key] = adapter
             adapter = adapter_cache[cache_key]

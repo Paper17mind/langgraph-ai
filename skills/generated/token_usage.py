@@ -22,12 +22,7 @@ def _read_records() -> list[dict]:
 
 @tool
 def get_token_usage_stats(period: str = "today") -> str:
-    """
-    Tampilkan statistik penggunaan token LLM dari log file.
-    Parameter 'period' bisa: 'today' (hari ini), 'week' (7 hari terakhir), 'all' (semua waktu).
-    Menampilkan: total request, total token (prompt + completion), rata-rata per request, dan estimasi biaya.
-    Gunakan tool ini ketika user bertanya tentang pemakaian token, biaya API, atau seberapa banyak token terpakai.
-    """
+    """Show LLM token usage stats from logs."""
     records = _read_records()
     if not records:
         return "❌ Belum ada data token usage. Log file belum ada atau masih kosong."

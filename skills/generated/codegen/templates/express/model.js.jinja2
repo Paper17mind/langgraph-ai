@@ -1,0 +1,16 @@
+const { DataTypes } = require('sequelize');
+const sequelize = require('../database');
+
+const {{ model.name }} = sequelize.define('{{ model.name }}', {
+{% for col in model.columns %}
+  {{ col.name }}: {
+    type: DataTypes.{{ col.type | upper }},
+    allowNull: {{ col.allow_null | default('true') | lower }}
+  }{% if not loop.last %},{% endif %}
+{% endfor %}
+}, {
+  tableName: '{{ model.table }}',
+  timestamps: true
+});
+
+module.exports = {{ model.name }};

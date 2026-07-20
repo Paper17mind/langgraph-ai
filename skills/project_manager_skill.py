@@ -5,12 +5,7 @@ BASE_PROJECTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath
 
 @tool
 def init_project(project_name: str, description: str) -> str:
-    """
-    Inisialisasi struktur kerangka kerja (scaffolding) untuk sebuah proyek baru.
-    Fungsi ini akan membuat folder proyek di dalam `/projects/` beserta sub-folder
-    `backend`, `frontend`, dan `docs`.
-    Gunakan tool ini JIKA USER memintamu membuat aplikasi/sistem web baru.
-    """
+    """Initialize new project scaffolding in /projects/."""
     try:
         if not os.path.exists(BASE_PROJECTS_DIR):
             os.makedirs(BASE_PROJECTS_DIR)
@@ -35,10 +30,7 @@ def init_project(project_name: str, description: str) -> str:
 
 @tool
 def save_fsd_document(project_name: str, fsd_content: str) -> str:
-    """
-    Menyimpan dokumen FSD (Functional Specification Document) ke dalam folder docs/ proyek.
-    Dokumen FSD wajib berisi: Tujuan, Fitur Utama, Arsitektur Backend (Database, Endpoint), dan Arsitektur Frontend.
-    """
+    """Save FSD document to docs/ folder."""
     try:
         docs_dir = os.path.join(BASE_PROJECTS_DIR, project_name, "docs")
         if not os.path.exists(docs_dir):

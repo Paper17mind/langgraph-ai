@@ -1,0 +1,13 @@
+const request = require('supertest');
+const app = require('../src/app');
+
+// Auto-generated Phase 1 tests for standard CRUD
+describe('API Routes', () => {
+  test('app is defined', () => {
+    expect(app).toBeDefined();
+  });
+
+{% for test in standard_tests %}
+{{ test }}
+{% endfor %}
+});
