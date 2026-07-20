@@ -65,6 +65,6 @@ def log_token_usage(usage: dict):
     
     try:
         with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_data, ensure_ascii=False) + "\\n")
+            f.write(json.dumps(log_data, ensure_ascii=False) + "\n")
     except Exception as e:
         print(f"[Log Error]: {e}")

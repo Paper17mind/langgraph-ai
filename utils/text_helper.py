@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 
 def truncate_or_save(content: str, max_length: int = 2000, context_name: str = "tool_output") -> str:
     """
@@ -17,7 +18,7 @@ def truncate_or_save(content: str, max_length: int = 2000, context_name: str = "
     logs_dir = os.path.join(base_dir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
     
-    timestamp = int(time.time())
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = f"{context_name}_{timestamp}.txt"
     filepath = os.path.join(logs_dir, filename)
     

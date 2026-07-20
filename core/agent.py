@@ -32,6 +32,51 @@ _tool_cache = {
     "file_mtimes": {},  # path -> last seen mtime
 }
 
+# ---------------------------------------------------------------------------
+# Tool output size limiter (Opsi C)
+# ---------------------------------------------------------------------------
+# If a tool returns more than TOOL_OUTPUT_THRESHOLD chars, we save the full
+# output to a timestamped file and return only a short summary to the LLM.
+# This prevents huge HTML/JSON/log dumps from bloating the context window.
+
+TOOL_OUTPUT_THRESHOLD = 1500  # chars - tune as needed
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+
+
+def _wrap_tool_output(tool: BaseTool) -> BaseTool:
+    """
+    Wraps a BaseTool so that if its string output exceeds TOOL_OUTPUT_THRESHOLD,
+    the full output is saved to a file and a compact summary is returned instead.
+    The LLM only sees the summary + file path, keeping context window small.
+    """
+    original_run = tool._run
+
+    def _run_with_limit(*args, config=None, run_manager=None, **kwargs):
+        from datetime import datetime
+        result = original_run(*args, config=config, run_manager=run_manager, **kwargs)
+        result_str = str(result) if not isinstance(result, str) else result
+        if len(result_str) <= TOOL_OUTPUT_THRESHOLD:
+            return result_str
+        # Save full output to file
+        os.makedirs(_LOGS_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        fname = f"{tool.name}_{ts}.txt"
+        fpath = os.path.join(_LOGS_DIR, fname)
+        try:
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(result_str)
+        except Exception:
+            return result_str  # fallback: return as-is if save fails
+        preview = result_str[:300].replace("\n", " ")
+        return (
+            f"[Output terlalu panjang: {len(result_str):,} chars]\n"
+            f"✅ Sudah disimpan ke: logs/{fname}\n"
+            f"Preview (300 chars pertama):\n{preview}..."
+        )
+
+    tool._run = _run_with_limit
+    return tool
+
 
 def _validate_skill_source(file_path: str) -> tuple[bool, str]:
     """
@@ -130,7 +175,7 @@ def load_all_tools(force: bool = False):
 
         for _, obj in inspect.getmembers(module):
             if isinstance(obj, BaseTool) and obj.name not in [t.name for t in dynamic_tools]:
-                dynamic_tools.append(obj)
+                dynamic_tools.append(_wrap_tool_output(obj))
 
         new_mtimes[file_path] = mtime
 
@@ -355,11 +400,21 @@ OPTIONAL_PROMPT_BLOCKS = {
         },
         "full": """Jika kamu diminta melakukan sesuatu dan kamu tidak punya tool yang sesuai, kamu diizinkan untuk menulis kode python skill baru. PENTING:
 1. Selalu simpan file kode/script baru HANYA di folder `skills/generated/`. DILARANG KERAS membuat file python di folder root (`/`).
-2. Jangan membuat script sekali pakai. Buatlah tool dengan decorator `@tool` yang DINAMIS (reusable) dengan parameter/argumen. Jangan membuat tool yang di-hardcode untuk 1 tugas spesifik (contoh: buat tool `search_email(query, limit)` bukan `cek_email_livin_hari_ini()`).
-3. Jika kamu butuh membuat file temporary atau script cakar-cakaran untuk testing (seperti melalui terminal bash `cat << EOF`), kamu WAJIB menyimpannya di dalam folder `scratch/` (buat foldernya jika belum ada). DILARANG KERAS menaruh file temporary di folder root!
-4. ANTI-DUPLIKASI PROYEK: SEBELUM membuat folder proyek baru, kamu WAJIB mengecek daftar folder yang sudah ada di dalam direktori `projects/`. Gunakan folder yang sudah ada jika proyeknya sama. Setelah membuat proyek baru atau mulai mengerjakannya, kamu WAJIB menyimpannya ke memori jangka panjang menggunakan tool 'remember_fact'.
-5. Skill baru yang kamu tulis ke `skills/generated/` akan otomatis divalidasi dan dimuat ulang secara otomatis pada panggilan tool berikutnya - kamu TIDAK perlu (dan tidak punya) tool khusus untuk mengaktifkannya. Jika skill barumu gagal dimuat, itu berarti ada error di kodenya (cek ulang syntax-nya) - PERBAIKI file-nya, jangan membuat file baru dengan nama lain.""",
-        "short": "[Ringkasan] Kalau butuh tool baru: taruh HANYA di `skills/generated/` (jangan di root), pakai decorator @tool dan bikin DINAMIS/reusable (bukan hardcode 1 tugas), file temporary taruh di `scratch/`, cek `projects/` dulu sebelum bikin folder proyek baru lalu catat ke memori.",
+2. ⚠️ WAJIB MUTLAK: SETIAP fungsi yang ingin kamu jadikan tool HARUS menggunakan decorator `@tool` dari `langchain_core.tools`. TANPA `@tool`, fungsi tidak akan pernah dikenali atau dipanggil oleh agent. Contoh template MINIMAL yang WAJIB diikuti:
+```python
+from langchain_core.tools import tool
+
+@tool
+def nama_tool(param1: str, param2: int = 10) -> str:
+    \"\"\"Deskripsi singkat apa yang tool ini lakukan. Tulis dengan jelas karena LLM membaca ini untuk memutuskan kapan memanggil tool.\"\"\"
+    # implementasi di sini
+    return "hasil"
+```
+3. Jangan membuat script sekali pakai. Buatlah tool yang DINAMIS (reusable) dengan parameter/argumen. Jangan membuat tool yang di-hardcode untuk 1 tugas spesifik (contoh: buat tool `search_email(query, limit)` bukan `cek_email_livin_hari_ini()`).
+4. Jika kamu butuh membuat file temporary atau script cakar-cakaran untuk testing (seperti melalui terminal bash `cat << EOF`), kamu WAJIB menyimpannya di dalam folder `scratch/` (buat foldernya jika belum ada). DILARANG KERAS menaruh file temporary di folder root!
+5. ANTI-DUPLIKASI PROYEK: SEBELUM membuat folder proyek baru, kamu WAJIB mengecek daftar folder yang sudah ada di dalam direktori `projects/`. Gunakan folder yang sudah ada jika proyeknya sama. Setelah membuat proyek baru atau mulai mengerjakannya, kamu WAJIB menyimpannya ke memori jangka panjang menggunakan tool 'remember_fact'.
+6. Skill baru yang kamu tulis ke `skills/generated/` akan otomatis divalidasi dan dimuat ulang secara otomatis pada panggilan tool berikutnya - kamu TIDAK perlu (dan tidak punya) tool khusus untuk mengaktifkannya. Jika skill barumu gagal dimuat (muncul pesan 'Skipping... No @tool-decorated function found'), itu berarti kamu LUPA menambahkan decorator `@tool` - PERBAIKI file-nya dengan menambahkan decorator tersebut.""",
+        "short": "[Ringkasan] Kalau butuh tool baru: taruh HANYA di `skills/generated/` (jangan di root), WAJIB pakai decorator @tool dari langchain_core.tools dan bikin DINAMIS/reusable (bukan hardcode 1 tugas), file temporary taruh di `scratch/`, cek `projects/` dulu sebelum bikin folder proyek baru lalu catat ke memori.",
     },
     "fsd_workflow": {
         "keywords": {
@@ -425,27 +480,61 @@ def build_dynamic_prompt(active_project: str = None, user_query: str = None) -> 
 # ---------------------------------------------------------------------------
 
 class AgentLoggingCallback(BaseCallbackHandler):
-    def on_chat_model_end(self, response, **kwargs):
+    def on_llm_end(self, response, **kwargs):
+        """Called when any LLM (including ChatModels) finishes generating."""
         try:
-            message = response.generations[0][0].message
-            content = message.content
-            tool_calls = getattr(message, "tool_calls", [])
-            
-            # Extract token usage if available
+            # Extract token usage - try multiple locations
+            usage = None
+
+            # 1. Standard LangChain location (ChatOpenAI, ChatGroq, etc.)
             if response.llm_output and "token_usage" in response.llm_output:
                 usage = response.llm_output["token_usage"]
+
+            # 2. Some providers put it directly in generation_info
+            if not usage and response.generations:
+                gen = response.generations[0][0]
+                gen_info = getattr(gen, "generation_info", None) or {}
+                if "usage" in gen_info:
+                    raw = gen_info["usage"]
+                    usage = {
+                        "prompt_tokens": raw.get("prompt_tokens", 0),
+                        "completion_tokens": raw.get("completion_tokens", 0),
+                        "total_tokens": raw.get("total_tokens", 0),
+                    }
+
+                # 3. usage_metadata on the message (newer LangChain ChatGeneration)
+                if not usage:
+                    message = getattr(gen, "message", None)
+                    meta = getattr(message, "usage_metadata", None) if message else None
+                    if meta:
+                        usage = {
+                            "prompt_tokens": getattr(meta, "input_tokens", 0),
+                            "completion_tokens": getattr(meta, "output_tokens", 0),
+                            "total_tokens": getattr(meta, "total_tokens", 0),
+                        }
+
+            if usage:
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 comp_tokens = usage.get("completion_tokens", 0)
                 total_tokens = usage.get("total_tokens", 0)
-                print(f"\\n🪙 [Token Usage] Prompt: {prompt_tokens} | Completion: {comp_tokens} | Total: {total_tokens}")
+                print(f"\n🪙 [Token Usage] Prompt: {prompt_tokens} | Completion: {comp_tokens} | Total: {total_tokens}")
                 log_token_usage(usage)
+            else:
+                # Debug: show raw structure so we can trace the right location
+                print(f"\n⚠️ [Token Usage] Not found. llm_output keys: {list((response.llm_output or {}).keys())}")
 
-            log_internal_step("llm_response", {
-                "content": content, 
-                "tool_calls": tool_calls
-            })
-        except Exception:
-            pass
+            # Log LLM response content
+            if response.generations:
+                gen = response.generations[0][0]
+                message = getattr(gen, "message", None)
+                content = getattr(message, "content", getattr(gen, "text", ""))
+                tool_calls = getattr(message, "tool_calls", []) if message else []
+                log_internal_step("llm_response", {
+                    "content": content,
+                    "tool_calls": tool_calls
+                })
+        except Exception as e:
+            print(f"[Callback Error] on_llm_end: {e}")
 
     def on_tool_start(self, serialized, input_str, **kwargs):
         try:

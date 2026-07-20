@@ -1,6 +1,8 @@
 from core.llm_client import llm
 from core import history_manager
+from langchain.tools import tool
 
+@tool
 def execute(user_message: str, session_id: str = "default") -> str:
     """
     Handles general chat using the configured chat model, with history.
