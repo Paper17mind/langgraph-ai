@@ -137,13 +137,16 @@ def run_cli_bot():
                     console.print(f"[bold red]❌ Perintah {cmd} tidak dikenal. Ketik /help untuk daftar perintah.[/]")
                     continue
                     
-            # Fetch history
+            # Fetch history — smart sliding window for token efficiency
             session_id = f"cli_{active_session}"
-            past_messages = history_manager.get_history(session_id, limit=6)
+            history_limit = int(os.getenv("HISTORY_LIMIT", "4"))
+            past_messages = history_manager.get_smart_history(session_id, recent_count=history_limit)
             messages = []
             for msg in past_messages:
                 if msg["role"] == "user":
                     messages.append(HumanMessage(content=msg["content"]))
+                elif msg["role"] == "system":
+                    messages.append(AIMessage(content=msg["content"]))
                 else:
                     messages.append(AIMessage(content=msg["content"]))
                     

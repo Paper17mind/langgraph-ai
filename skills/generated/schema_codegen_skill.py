@@ -80,6 +80,35 @@ def read_project_schema(schema_path: str) -> str:
         return f"❌ Error membaca schema: {e}"
 
 
+def _validate_schema(schema: dict) -> str | None:
+    """Validate schema structure. Returns error message or None if valid."""
+    if not isinstance(schema.get("models"), list):
+        return "Schema harus memiliki key 'models' berupa list."
+    if not isinstance(schema.get("routes"), list):
+        return "Schema harus memiliki key 'routes' berupa list."
+    if not isinstance(schema.get("controllers"), list):
+        return "Schema harus memiliki key 'controllers' berupa list."
+
+    for i, route in enumerate(schema.get("routes", [])):
+        ctrl = route.get("controller")
+        if not isinstance(ctrl, dict):
+            return f"routes[{i}].controller harus berupa object dict, bukan string."
+        if "function" not in ctrl:
+            return (
+                f"routes[{i}].controller harus memiliki key 'function' (bukan 'action' atau 'name' saja). "
+                f"Contoh: {{\"name\": \"UserController\", \"function\": \"index\"}}"
+            )
+
+    for i, ctrl in enumerate(schema.get("controllers", [])):
+        if "functions" not in ctrl:
+            return (
+                f"controllers[{i}] harus memiliki key 'functions' (bukan 'actions'). "
+                f"Contoh: {{\"name\": \"UserController\", \"model\": \"User\", \"functions\": [...]}}"
+            )
+
+    return None
+
+
 @tool
 def generate_project_from_schema(
     schema_path: str,
@@ -88,9 +117,25 @@ def generate_project_from_schema(
     ai_delay_seconds: int = 3,
 ) -> str:
     """
-    Generate Express/Laravel/FastAPI project from JSON schema.
-    IMPORTANT: output_dir MUST ALWAYS point to a `backend` folder (e.g. projects/name/backend).
-    Do not use `app` as the output_dir.
+    Generate Express/Laravel/FastAPI project dari file JSON schema.
+
+    PENTING:
+    - output_dir HARUS mengarah ke folder `backend` (contoh: projects/nama/backend).
+    - Jangan gunakan `app` sebagai output_dir.
+    - Jangan ubah atau timpa schema.json yang sudah ada! Baca dulu dengan read_project_schema.
+
+    Format schema.json yang BENAR (perhatikan key 'function' dan 'functions'):
+    {
+      "models": [{"name": "User", "table": "users", "columns": [{"name": "name", "type": "string"}]}],
+      "routes": [{
+        "method": "GET", "path": "/api/users",
+        "controller": {"name": "UserController", "function": "index"}
+      }],
+      "controllers": [{
+        "name": "UserController", "model": "User",
+        "functions": [{"name": "index", "ai_inject_logic": "standard"}]
+      }]
+    }
     """
     try:
         schema_path = _resolve_path(schema_path)
@@ -104,6 +149,17 @@ def generate_project_from_schema(
             return f"❌ Framework tidak didukung: '{framework}'. Pilihan: {list(ADAPTERS.keys())}"
 
         schema = _load_schema(schema_path)
+
+        # Validate schema structure before running
+        validation_error = _validate_schema(schema)
+        if validation_error:
+            return (
+                f"❌ Format schema.json tidak valid: {validation_error}\n\n"
+                f"Gunakan read_project_schema untuk membaca schema yang sudah ada, "
+                f"atau pastikan format menggunakan key 'function' (bukan 'action') "
+                f"dan 'functions' (bukan 'actions')."
+            )
+
         adapter = ADAPTERS[framework](schema, output_dir)
 
         # ---------------------------------------------------------------

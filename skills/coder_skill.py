@@ -7,6 +7,10 @@ def write_code_to_file(filename: str, content: str) -> str:
     """
     Creates or overwrites a file with the provided code or text content.
     Returns a success message or an error if it fails (e.g. syntax errors).
+
+    PENTING: Jangan gunakan tool ini untuk menulis atau menimpa file schema.json.
+    Schema project harus dibuat menggunakan format yang benar dan TIDAK boleh ditimpa sembarangan.
+    Gunakan read_project_schema terlebih dahulu untuk membaca schema yang sudah ada.
     """
     try:
         abs_path = os.path.abspath(filename)
@@ -14,6 +18,15 @@ def write_code_to_file(filename: str, content: str) -> str:
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
         
+        # Block OVERWRITING an existing schema.json to prevent agent from corrupting project schemas
+        if os.path.basename(abs_path) == "schema.json" and os.path.exists(abs_path):
+            return (
+                "❌ DILARANG: Tidak boleh menimpa schema.json yang sudah ada menggunakan tool ini. "
+                "Schema adalah file konfigurasi project yang sensitif dan tidak boleh ditimpa sembarangan. "
+                "Gunakan read_project_schema untuk membaca schema yang sudah ada, "
+                "lalu gunakan generate_project_from_schema untuk generate kode dari schema tersebut."
+            )
+
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
             

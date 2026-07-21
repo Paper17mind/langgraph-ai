@@ -79,6 +79,55 @@ def get_history(session_id: str, limit: int = 10):
     conn.close()
     return [{"role": row[0], "content": _trim_content(row[1])} for row in rows]
 
+
+def get_smart_history(session_id: str, recent_count: int = 4, older_count: int = 10):
+    """
+    Token-efficient history retrieval:
+    - `recent_count` most recent messages: returned full (trimmed by _trim_content)
+    - Up to `older_count` messages before that: compressed into a single summary block
+    
+    This avoids sending 20 full messages every turn. Older messages are summarized
+    as "User: <first 80 chars>..." to preserve topic awareness without full content.
+    """
+    total = recent_count + older_count
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT role, content FROM (
+            SELECT role, content, timestamp FROM messages 
+            WHERE session_id = ? 
+            ORDER BY timestamp DESC LIMIT ?
+        ) ORDER BY timestamp ASC
+    ''', (session_id, total))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if len(rows) <= recent_count:
+        # Not enough messages to need summarization
+        return [{"role": row[0], "content": _trim_content(row[1])} for row in rows]
+
+    # Split: older messages get compressed, recent stay full
+    split_point = len(rows) - recent_count
+    older = rows[:split_point]
+    recent = rows[split_point:]
+
+    # Compress older messages into a single summary
+    summary_lines = []
+    for role, content in older:
+        label = "User" if role == "user" else "AI"
+        short = (content or "")[:80].replace("\n", " ").strip()
+        if len(content or "") > 80:
+            short += "..."
+        summary_lines.append(f"- {label}: {short}")
+
+    summary_block = "[Ringkasan percakapan sebelumnya]\n" + "\n".join(summary_lines)
+
+    result = [{"role": "system", "content": summary_block}]
+    for role, content in recent:
+        result.append({"role": role, "content": _trim_content(content)})
+
+    return result
+
 def get_all_sessions(prefix: str) -> list:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

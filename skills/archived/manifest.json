@@ -1,0 +1,15 @@
+{
+  "description": "Archived skills that are not auto-loaded. Move a skill back to skills/generated/ to re-activate it.",
+  "skills": [
+    {
+      "file": "local_guidelines_skill.py",
+      "tools": ["list_guidelines", "read_guideline"],
+      "description": "Manages local guideline documents in the guidelines/ folder"
+    },
+    {
+      "file": "email_search_skill.py",
+      "tools": ["search_email"],
+      "description": "Searches email inbox via IMAP (requires EMAIL_USER and EMAIL_PASS in .env)"
+    }
+  ]
+}

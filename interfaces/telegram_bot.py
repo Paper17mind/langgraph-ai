@@ -126,12 +126,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    # Format history
-    history = history_manager.get_history(session_id, limit=20)
+    # Format history — use smart sliding window for token efficiency
+    history_limit = int(os.getenv("HISTORY_LIMIT", "4"))
+    history = history_manager.get_smart_history(session_id, recent_count=history_limit)
     messages = []
     for msg in history:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "system":
+            # Summary block from older messages — inject as AI context
+            messages.append(AIMessage(content=msg["content"]))
         else:
             messages.append(AIMessage(content=msg["content"]))
             
@@ -151,9 +155,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         console.print(f"\n[bold green]=== Processing Telegram Request from {session_id} ===[/]")
         
         final_message = ""
+        recursion_limit = int(os.getenv("RECURSION_LIMIT", "20"))
         for event in agent_executor.stream(
             {"messages": messages}, 
-            config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
+            config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": recursion_limit}
         ):
             for key, value in event.items():
                 console.print(f"[bold magenta]🤖 Node Finished:[/] {key}")
