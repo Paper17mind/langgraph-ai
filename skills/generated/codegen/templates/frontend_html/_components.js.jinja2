@@ -1,0 +1,128 @@
+// Shared Alpine.js components & utilities — loaded by all pages
+// Usage: <script src="_components.js"></script>
+
+// ── Toast notification system ──────────────────────────────────────────────
+function toastStore() {
+    return {
+        toasts: [],
+        show(msg, type = 'success') {
+            const id = Date.now();
+            this.toasts.push({ id, msg, type });
+            setTimeout(() => this.dismiss(id), 3500);
+        },
+        dismiss(id) {
+            this.toasts = this.toasts.filter(t => t.id !== id);
+        }
+    };
+}
+
+// ── Confirm dialog helper ──────────────────────────────────────────────────
+function confirmDelete(label, onConfirm) {
+    if (window.confirm(`Delete "${label}"? This cannot be undone.`)) {
+        onConfirm();
+    }
+}
+
+// ── Generic CRUD page data factory ────────────────────────────────────────
+//    apiPath   : string  e.g. "transactions"
+//    fkSources : array   e.g. [{ col: "book_id", api: "books" }, ...]
+function crudPage(apiPath, fkSources = []) {
+    return {
+        // ── state
+        items: [],
+        search: '',
+        page: 1,
+        limit: 15,
+        totalPages: 1,
+        isModalOpen: false,
+        isSaving: false,
+        editingId: null,
+        form: {},
+        fkOptions: {},   // { "book_id": [ {id:1, label:"…"}, … ] }
+
+        // ── lifecycle
+        async init() {
+            await this.loadFkOptions();
+            await this.fetchData();
+        },
+
+        // ── fetch FK dropdown options
+        async loadFkOptions() {
+            for (const src of fkSources) {
+                try {
+                    const res = await fetch(`/api/${src.api}?limit=500`);
+                    const json = await res.json();
+                    const rows = json.data || json;
+                    // Use first non-id string column as label, fall back to id
+                    this.fkOptions[src.col] = rows.map(r => {
+                        const labelKey = Object.keys(r).find(k => k !== 'id' && typeof r[k] === 'string') || 'id';
+                        return { value: r.id, label: r[labelKey] ?? r.id };
+                    });
+                } catch (e) {
+                    console.warn(`[FK] Could not load ${src.api}:`, e);
+                    this.fkOptions[src.col] = [];
+                }
+            }
+        },
+
+        // ── list
+        async fetchData() {
+            try {
+                const res = await fetch(`/api/${apiPath}?page=${this.page}&limit=${this.limit}&search=${this.search}`);
+                const json = await res.json();
+                this.items = json.data || json;
+                this.totalPages = json.total_pages || json.totalPages || 1;
+            } catch (e) {
+                console.error('[CRUD] fetchData error', e);
+                Alpine.store('toast')?.show('Failed to load data.', 'error');
+            }
+        },
+
+        // ── create / update
+        async saveItem() {
+            this.isSaving = true;
+            const method = this.editingId ? 'PUT' : 'POST';
+            const url = this.editingId ? `/api/${apiPath}/${this.editingId}` : `/api/${apiPath}`;
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.form)
+                });
+                if (!res.ok) throw new Error(await res.text());
+                this.isModalOpen = false;
+                await this.fetchData();
+                Alpine.store('toast')?.show(this.editingId ? 'Record updated.' : 'Record created.', 'success');
+            } catch (e) {
+                Alpine.store('toast')?.show('Error saving: ' + e.message, 'error');
+            } finally {
+                this.isSaving = false;
+            }
+        },
+
+        // ── delete
+        async deleteItem(id, label = '') {
+            confirmDelete(label || id, async () => {
+                try {
+                    const res = await fetch(`/api/${apiPath}/${id}`, { method: 'DELETE' });
+                    if (!res.ok) throw new Error(await res.text());
+                    await this.fetchData();
+                    Alpine.store('toast')?.show('Record deleted.', 'success');
+                } catch (e) {
+                    Alpine.store('toast')?.show('Error deleting: ' + e.message, 'error');
+                }
+            });
+        },
+
+        // ── modal
+        openModal(item = null) {
+            this.editingId = item ? item.id : null;
+            this.form = item ? { ...item } : {};
+            this.isModalOpen = true;
+        },
+
+        // ── pagination
+        nextPage() { if (this.page < this.totalPages) { this.page++; this.fetchData(); } },
+        prevPage() { if (this.page > 1) { this.page--; this.fetchData(); } },
+    };
+}

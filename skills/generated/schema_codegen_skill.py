@@ -87,7 +87,11 @@ def generate_project_from_schema(
     output_dir: str,
     ai_delay_seconds: int = 3,
 ) -> str:
-    """Generate Express/Laravel/FastAPI project from JSON schema."""
+    """
+    Generate Express/Laravel/FastAPI project from JSON schema.
+    IMPORTANT: output_dir MUST ALWAYS point to a `backend` folder (e.g. projects/name/backend).
+    Do not use `app` as the output_dir.
+    """
     try:
         schema_path = _resolve_path(schema_path)
         output_dir = _resolve_path(output_dir)
@@ -118,8 +122,12 @@ def generate_project_from_schema(
         # Generate Frontend
         # ---------------------------------------------------------------
         print(f"[codegen] Generating frontend html files...")
-        frontend_adapter = ADAPTERS["frontend_html"](schema, output_dir)
-        all_written += _write_files(frontend_adapter.generate_all(), output_dir)
+        # Frontend selalu di-output ke folder "frontend" sejajar dengan output_dir (backend)
+        # Contoh: jika output_dir = projects/laundry/backend -> frontend_dir = projects/laundry/frontend
+        project_root = os.path.dirname(os.path.abspath(output_dir.rstrip('/\\')))
+        frontend_dir = os.path.join(project_root, "frontend")
+        frontend_adapter = ADAPTERS["frontend_html"](schema, frontend_dir)
+        all_written += _write_files(frontend_adapter.generate_all(), frontend_dir)
 
         phase1_count = len(all_written)
 
@@ -129,6 +137,7 @@ def generate_project_from_schema(
         jobs = adapter.get_ai_inject_jobs()
         queued = queue_jobs(schema_path, framework, output_dir, jobs)
 
+        phase1_count = len(all_written)
         summary_files = "\n".join(f"  ✅ {f}" for f in all_written[:20])
         if len(all_written) > 20:
             summary_files += f"\n  ... dan {len(all_written)-20} file lainnya"

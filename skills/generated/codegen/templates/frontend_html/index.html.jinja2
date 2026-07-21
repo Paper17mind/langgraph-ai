@@ -1,28 +1,72 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <title>Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ project_name }} — Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="_components.js"></script>
+    <style>[x-cloak]{display:none!important}</style>
 </head>
-<body class="bg-gray-100 flex min-h-screen font-sans">
-    <aside class="w-64 bg-white shadow-md">
-        <div class="p-6">
-            <h1 class="text-2xl font-bold text-gray-800">Dashboard</h1>
+<body class="bg-gray-50 flex h-full font-sans" x-data x-init="$store.toast || Alpine.store('toast', toastStore())">
+
+    <!-- Sidebar -->
+    <aside class="w-64 shrink-0 bg-white border-r border-gray-200 flex flex-col min-h-screen">
+        <div class="px-6 py-5 border-b border-gray-100">
+            <h1 class="text-xl font-bold text-gray-900">{{ project_name }}</h1>
+            <p class="text-xs text-gray-400 mt-0.5">Admin Panel</p>
         </div>
-        <nav class="mt-6">
-            <a href="index.html" class="block py-3 px-6 bg-blue-50 text-blue-700 font-semibold border-r-4 border-blue-600">Home</a>
-            {% for model in models %}
-            <a href="{{ to_kebab(model.name) }}.html" class="block py-3 px-6 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">{{ model.name }}</a>
+        <nav class="flex-1 py-4 space-y-0.5 px-3">
+            <a href="index.html" class="flex items-center gap-3 py-2 px-3 rounded-lg text-sm font-medium bg-blue-50 text-blue-700">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                Home
+            </a>
+            {% for m in models %}
+            <a href="{{ m.api_path }}.html" class="flex items-center gap-3 py-2 px-3 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                {{ m.name }}
+            </a>
             {% endfor %}
         </nav>
     </aside>
-    <main class="flex-1 p-8">
-        <h2 class="text-3xl font-bold text-gray-800 mb-6">Welcome to Dashboard</h2>
-        <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
-            <p class="text-gray-600">Select a menu from the sidebar to manage data.</p>
-        </div>
-    </main>
+
+    <!-- Main -->
+    <div class="flex-1 flex flex-col min-h-screen">
+
+        <!-- Topbar -->
+        <header class="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-800">Dashboard</h2>
+        </header>
+
+        <!-- Content -->
+        <main class="flex-1 p-8">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                {% for m in models %}
+                <a href="{{ m.api_path }}.html"
+                   class="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md hover:border-blue-300 transition-all group">
+                    <div class="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center mb-4 group-hover:bg-blue-200 transition-colors">
+                        <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                    </div>
+                    <h3 class="font-semibold text-gray-900 text-sm">{{ m.name }}</h3>
+                    <p class="text-xs text-gray-400 mt-1">Manage {{ m.api_path }}</p>
+                </a>
+                {% endfor %}
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div x-data class="fixed bottom-5 right-5 z-[999] space-y-2" x-cloak>
+        <template x-for="t in $store.toast.toasts" :key="t.id">
+            <div x-transition
+                 :class="t.type === 'error' ? 'bg-red-600' : 'bg-emerald-600'"
+                 class="text-white text-sm px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 min-w-[220px]">
+                <span x-text="t.msg" class="flex-1"></span>
+                <button @click="$store.toast.dismiss(t.id)" class="opacity-70 hover:opacity-100">✕</button>
+            </div>
+        </template>
+    </div>
+
 </body>
 </html>

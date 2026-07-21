@@ -118,18 +118,21 @@ def _send_telegram(message: str):
 def _call_llm(prompt: str) -> str:
     """Call the LLM via environment-configured API (same as agent)."""
     try:
-        from langchain_openai import ChatOpenAI
-        from langchain_core.messages import HumanMessage
+        from core.llm_client import llm
 
-        llm = ChatOpenAI(
-            model=os.environ.get("9ROUTER_MODEL", "gpt-4o-mini"),
-            openai_api_base=os.environ.get("9ROUTER_BASE_URL", "https://api.openai.com/v1"),
-            openai_api_key=os.environ.get("9ROUTER_API_KEY", ""),
-            temperature=0.2,
+        system_prompt = (
+            "You are a code generator. Output ONLY raw code without markdown fences, "
+            "explanations, or comments unless they are inline code comments. "
+            "Do not wrap output in ```."
         )
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response_text = llm.ask(prompt, system_prompt=system_prompt, use_model="groq")
+
+        # If llm returned an error string, pass it through
+        if response_text.startswith("Error with"):
+            return f"// LLM error: {response_text}"
+
         # Strip markdown code fences if LLM wraps output
-        code = response.content.strip()
+        code = response_text.strip()
         code = re.sub(r'^```[\w]*\n?', '', code)
         code = re.sub(r'\n?```$', '', code)
         return code.strip()

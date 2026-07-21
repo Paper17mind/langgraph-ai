@@ -52,6 +52,11 @@ class LLMClient:
             "response": response,
             "tokens": tokens or {}
         }
+        
+        # Display token usage in the console log
+        if tokens:
+            print(f"🪙 [Token Usage] Prompt: {tokens.get('prompt', 0)} | Completion: {tokens.get('completion', 0)} | Total: {tokens.get('total', 0)} ({model})")
+            
         try:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(log_data, ensure_ascii=False) + "\n")
@@ -123,11 +128,12 @@ class LLMClient:
             payload = {
                 "model": self.ninerouter_model,
                 "messages": messages,
-                "temperature": 0.0
+                "temperature": 0.0,
+                "stream": False
             }
             
             try:
-                resp = requests.post(self.ninerouter_url, headers=headers, json=payload, timeout=30)
+                resp = requests.post(self.ninerouter_url, headers=headers, json=payload, timeout=120)
                 resp.raise_for_status()
                 
                 resp.encoding = 'utf-8'
@@ -145,7 +151,9 @@ class LLMClient:
                         "total": data['usage'].get("total_tokens", 0)
                     }
             except requests.exceptions.HTTPError as e:
-                response_text = f"Error with 9router: {e.response.status_code} - {e.response.text}"
+                response_text = f"Error with 9router HTTP {e.response.status_code}: {e.response.text}"
+            except json.JSONDecodeError as e:
+                response_text = f"Error with 9router JSONDecodeError: {e} | Raw Response: '{resp.text}'"
             except Exception as e:
                 response_text = f"Error with 9router: {e}"
                 

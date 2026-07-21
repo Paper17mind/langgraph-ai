@@ -167,13 +167,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         agent_msgs = [agent_msgs]
                         
                     for m in agent_msgs:
-                        if hasattr(m, 'content') and m.content:
-                            final_message = m.content
-                            console.print(Panel(m.content[:500] + ("..." if len(m.content) > 500 else ""), title=f"Output from {key}", border_style="green"))
-                            
-                        if hasattr(m, 'tool_calls') and m.tool_calls:
-                            for tc in m.tool_calls:
-                                console.print(f"[bold yellow]🛠️ Tool Call:[/] {tc['name']}")
+                        # Log tool outputs (ToolMessage)
+                        if getattr(m, 'type', '') == 'tool':
+                            out_str = str(m.content)
+                            console.print(Panel(out_str[:1000] + ("..." if len(out_str) > 1000 else ""), title=f"🔧 Tool Output ({m.name})", border_style="cyan"))
+                        else:
+                            # AI/Human Message
+                            if hasattr(m, 'content') and m.content:
+                                final_message = m.content
+                                out_str = str(m.content)
+                                console.print(Panel(out_str[:1000] + ("..." if len(out_str) > 1000 else ""), title=f"💬 Output from {key}", border_style="green"))
+                                
+                            if hasattr(m, 'tool_calls') and m.tool_calls:
+                                for tc in m.tool_calls:
+                                    console.print(f"[bold yellow]🛠️ Tool Call:[/] {tc['name']}")
+                                    if 'args' in tc:
+                                        console.print(f"[bold yellow]   Args:[/] {tc['args']}")
                                 
         if not final_message:
             final_message = "⚠️ Maaf, agent tidak memberikan respons (pesan kosong). Silakan coba lagi."

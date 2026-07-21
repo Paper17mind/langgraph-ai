@@ -63,5 +63,26 @@ class MemoryDB:
             print(f"Error reading memory: {e}")
             return []
 
+    def forget_fact(self, fact_text: str) -> str:
+        """Deletes a fact from the database if it contains the specified text."""
+        try:
+            self._init_db()
+            data = self._vector_store.get()
+            docs = data.get("documents", [])
+            ids = data.get("ids", [])
+            
+            target_ids = []
+            for doc, doc_id in zip(docs, ids):
+                if fact_text.strip().lower() in doc.strip().lower():
+                    target_ids.append(doc_id)
+            
+            if not target_ids:
+                return f"Tidak menemukan memori yang mengandung teks: '{fact_text}'"
+                
+            self._vector_store.delete(ids=target_ids)
+            return f"Berhasil menghapus {len(target_ids)} memori yang mengandung: '{fact_text}'"
+        except Exception as e:
+            return f"Gagal menghapus memori: {e}"
+
 # Singleton instance
 memory_db = MemoryDB()

@@ -118,6 +118,29 @@ app.listen(port, () => {
 """
         files["src/index.js"] = index_js.strip()
 
+        files["package.json"] = """{
+  "name": "express-api-service",
+  "version": "1.0.0",
+  "description": "Generated API Service",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "sequelize": "^6.37.0",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.0",
+    "supertest": "^7.0.0"
+  }
+}"""
+
         return files
 
     def generate_controllers(self) -> dict[str, str]:
@@ -211,14 +234,17 @@ app.listen(port, () => {
         model = self.models.get(model_name, {})
         cols = model.get("columns", [])
         col_desc = ", ".join(f"{c['name']} ({c.get('type','string')})" for c in cols)
+        all_models = ", ".join(self.models.keys())
         return (
             f"You are an Express.js + Sequelize expert. Generate ONLY the JavaScript "
             f"function body for the following async controller method.\n\n"
             f"Controller: {controller_name}\nFunction: {function_name}\n"
             f"Task: {ai_inject_logic}\n\n"
-            f"Model: {model_name} — Columns: {col_desc}\n\n"
+            f"Current Model: {model_name} — Columns: {col_desc}\n"
+            f"All Available Models in Project: {all_models}\n\n"
             f"Requirements:\n- Use async/await with Sequelize\n"
             f"- Use req, res parameters (already in scope)\n"
+            f"- Do NOT use `req.models`. If you need to access any models, require them locally inside the function (e.g. `const Transaction = require('../models/Transaction');`)\n"
             f"- No function signature, only the body\n"
             f"- No markdown, pure JS code only\n"
         )

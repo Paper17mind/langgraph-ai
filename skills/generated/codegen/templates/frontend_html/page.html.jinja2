@@ -1,219 +1,261 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <title>{{ model.name }} Management</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ model.name }} — {{ project_name }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="_components.js"></script>
+    <style>[x-cloak]{display:none!important}</style>
 </head>
-<body class="bg-gray-100 flex min-h-screen font-sans">
-    <!-- Sidebar -->
-    <aside class="w-64 bg-white shadow-md z-10">
-        <div class="p-6">
-            <h1 class="text-2xl font-bold text-gray-800">Dashboard</h1>
-        </div>
-        <nav class="mt-6">
-            <a href="index.html" class="block py-3 px-6 text-gray-600 hover:bg-gray-50 transition-colors">Home</a>
-            {% for m in models %}
-            <a href="{{ to_kebab(m.name) }}.html" class="block py-3 px-6 {% if m.name == model.name %}bg-blue-50 text-blue-700 font-semibold border-r-4 border-blue-600{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors{% endif %}">{{ m.name }}</a>
-            {% endfor %}
-        </nav>
-    </aside>
+{% set fk_cols = model.fk_columns %}
+{% set fk_js = [] %}
+{% for fk in fk_cols %}{% set _ = fk_js.append('{ col: "' + fk.col.name + '", api: "' + fk.api + '" }') %}{% endfor %}
+<body class="bg-gray-50 h-full font-sans"
+      x-data="crudPage('{{ model.api_path }}', [{{ fk_js | join(', ') }}])"
+      x-init="$store.toast || Alpine.store('toast', toastStore()); init()">
 
-    <!-- Main Content -->
-    <main class="flex-1 p-8" x-data="crudData()">
-        <div class="flex justify-between items-center mb-8">
-            <h2 class="text-3xl font-bold text-gray-800">{{ model.name }} Management</h2>
-            <button @click="openModal()" class="bg-blue-600 text-white px-5 py-2.5 rounded-lg shadow-sm hover:bg-blue-700 transition-colors font-medium flex items-center">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                Add New
-            </button>
-        </div>
+    <div class="flex min-h-screen">
 
-        <!-- Filter & Table -->
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div class="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                <div class="relative w-72">
-                    <input type="text" x-model="search" @input.debounce.500ms="fetchData()" placeholder="Search..." class="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow">
-                    <svg class="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                </div>
+        <!-- ── Sidebar ────────────────────────────────────────────── -->
+        <aside class="w-64 shrink-0 bg-white border-r border-gray-200 flex flex-col">
+            <div class="px-6 py-5 border-b border-gray-100">
+                <h1 class="text-xl font-bold text-gray-900">{{ project_name }}</h1>
+                <p class="text-xs text-gray-400 mt-0.5">Admin Panel</p>
             </div>
-            
-            <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse">
-                    <thead>
-                        <tr class="bg-gray-50/50 text-gray-500 text-xs uppercase tracking-wider">
-                            {% for col in model.columns %}
-                            <th class="border-b py-4 px-6 font-semibold">{{ col.name }}</th>
-                            {% endfor %}
-                            <th class="border-b py-4 px-6 font-semibold text-right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-100">
-                        <template x-for="item in items" :key="item.id">
-                            <tr class="hover:bg-blue-50/50 transition-colors group">
-                                {% for col in model.columns %}
-                                <td class="py-4 px-6 text-gray-700 text-sm" x-text="item.{{ col.name }}"></td>
-                                {% endfor %}
-                                <td class="py-4 px-6 text-right">
-                                    <button @click="openModal(item)" class="text-indigo-600 hover:text-indigo-900 font-medium mr-3 opacity-0 group-hover:opacity-100 transition-opacity">Edit</button>
-                                    <button @click="deleteItem(item.id)" class="text-red-600 hover:text-red-900 font-medium opacity-0 group-hover:opacity-100 transition-opacity">Delete</button>
-                                </td>
-                            </tr>
-                        </template>
-                        <tr x-show="items.length === 0">
-                            <td colspan="100%" class="py-8 text-center text-gray-500">No data found</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+            <nav class="flex-1 py-4 space-y-0.5 px-3 overflow-y-auto">
+                <a href="index.html"
+                   class="flex items-center gap-3 py-2 px-3 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                    Home
+                </a>
+                {% for m in models %}
+                <a href="{{ m.api_path }}.html"
+                   class="flex items-center gap-3 py-2 px-3 rounded-lg text-sm font-medium transition-colors
+                          {{ 'bg-blue-50 text-blue-700' if m.name == model.name else 'text-gray-600 hover:bg-gray-100 hover:text-gray-900' }}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                    {{ m.name }}
+                </a>
+                {% endfor %}
+            </nav>
+        </aside>
 
-            <!-- Pagination -->
-            <div class="p-4 border-t border-gray-100 flex justify-between items-center bg-gray-50/50 text-sm">
-                <div class="text-gray-600">
-                    Showing page <span class="font-semibold text-gray-900" x-text="page"></span> of <span class="font-semibold text-gray-900" x-text="totalPages"></span>
-                </div>
-                <div class="flex space-x-2">
-                    <button @click="prevPage()" :disabled="page <= 1" class="px-3 py-1.5 border border-gray-300 rounded-md bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Previous</button>
-                    <button @click="nextPage()" :disabled="page >= totalPages" class="px-3 py-1.5 border border-gray-300 rounded-md bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Next</button>
-                </div>
-            </div>
-        </div>
+        <!-- ── Page content ──────────────────────────────────────── -->
+        <div class="flex-1 flex flex-col">
 
-        <!-- Modal Dialog -->
-        <div x-show="isModalOpen" style="display: none;" class="fixed inset-0 z-50 flex items-center justify-center" x-cloak>
-            <div class="absolute inset-0 bg-gray-900/40 backdrop-blur-sm" x-show="isModalOpen" x-transition.opacity @click="isModalOpen = false"></div>
-            
-            <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg relative z-10 overflow-hidden" 
-                 x-show="isModalOpen" 
-                 x-transition:enter="transition ease-out duration-300"
-                 x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-                 x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100"
-                 x-transition:leave="transition ease-in duration-200"
-                 x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
-                 x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95">
-                
-                <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <h3 class="text-xl font-bold text-gray-800" x-text="editingId ? 'Edit {{ model.name }}' : 'Create New {{ model.name }}'"></h3>
-                    <button @click="isModalOpen = false" class="text-gray-400 hover:text-gray-600">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                    </button>
+            <!-- Topbar -->
+            <header class="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-800">{{ model.name }}</h2>
+                    <p class="text-xs text-gray-400">/api/{{ model.api_path }}</p>
                 </div>
-                
-                <div class="p-6">
-                    <form @submit.prevent="saveItem()">
-                        <div class="space-y-4">
-                            {% for col in model.columns %}
-                            {% if not col.primary and not col.autoIncrement %}
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">{{ col.name }}</label>
-                                <input type="text" x-model="form.{{ col.name }}" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow" required>
-                            </div>
-                            {% endif %}
-                            {% endfor %}
-                        </div>
-                        
-                        <div class="mt-8 flex justify-end space-x-3">
-                            <button type="button" @click="isModalOpen = false" class="px-5 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium">Cancel</button>
-                            <button type="submit" class="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm flex items-center">
-                                <span x-show="!isSaving">Save Changes</span>
-                                <span x-show="isSaving">Saving...</span>
+                <button @click="openModal()"
+                        class="inline-flex items-center gap-2 bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    Add New
+                </button>
+            </header>
+
+            <!-- Main -->
+            <main class="flex-1 p-8">
+
+                <!-- Search -->
+                <div class="mb-4">
+                    <div class="relative w-72">
+                        <input type="text" x-model="search"
+                               @input.debounce.500ms="page=1; fetchData()"
+                               placeholder="Search {{ model.name }}…"
+                               class="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="bg-gray-50 border-b border-gray-100 text-xs text-gray-500 uppercase tracking-wider">
+                                    {% for col in model.columns %}
+                                    <th class="px-5 py-3 font-semibold">{{ col.name }}</th>
+                                    {% endfor %}
+                                    <th class="px-5 py-3 font-semibold text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-50">
+                                <template x-for="item in items" :key="item.id">
+                                    <tr class="hover:bg-blue-50/30 transition-colors group">
+                                        {% for col in model.columns %}
+                                        <td class="px-5 py-3.5 text-gray-700 text-sm max-w-[200px] truncate"
+                                            x-text="item.{{ col.name }}"></td>
+                                        {% endfor %}
+                                        <td class="px-5 py-3.5 text-right whitespace-nowrap">
+                                            <button @click="openModal(item)"
+                                                    class="text-indigo-600 hover:text-indigo-800 font-medium text-xs mr-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                Edit
+                                            </button>
+                                            <button @click="deleteItem(item.id)"
+                                                    class="text-red-500 hover:text-red-700 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                                                Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <tr x-show="items.length === 0">
+                                    <td colspan="100%"
+                                        class="py-12 text-center text-gray-400 text-sm">
+                                        No records found
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500 bg-gray-50/50">
+                        <span>Page <b x-text="page" class="text-gray-700"></b> of <b x-text="totalPages" class="text-gray-700"></b></span>
+                        <div class="flex gap-2">
+                            <button @click="prevPage()" :disabled="page <= 1"
+                                    class="px-3 py-1.5 border border-gray-200 rounded-md bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                                ← Prev
+                            </button>
+                            <button @click="nextPage()" :disabled="page >= totalPages"
+                                    class="px-3 py-1.5 border border-gray-200 rounded-md bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                                Next →
                             </button>
                         </div>
-                    </form>
+                    </div>
                 </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- ── Modal ───────────────────────────────────────────────────── -->
+    <div x-show="isModalOpen" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center">
+
+        <!-- Backdrop -->
+        <div class="absolute inset-0 bg-gray-900/40 backdrop-blur-sm"
+             x-transition.opacity
+             @click="isModalOpen = false">
+        </div>
+
+        <!-- Dialog -->
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden z-10"
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 scale-95"
+             x-transition:enter-end="opacity-100 scale-100"
+             x-transition:leave="transition ease-in duration-150"
+             x-transition:leave-start="opacity-100 scale-100"
+             x-transition:leave-end="opacity-0 scale-95">
+
+            <!-- Header -->
+            <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h3 class="text-base font-semibold text-gray-800"
+                    x-text="editingId ? 'Edit {{ model.name }}' : 'New {{ model.name }}'">
+                </h3>
+                <button @click="isModalOpen = false"
+                        class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <!-- Body / Form -->
+            <div class="p-6 max-h-[75vh] overflow-y-auto">
+                <form @submit.prevent="saveItem()" class="space-y-4">
+
+                    {% for col in model.columns %}
+                    {% if not col.primary and not col.autoIncrement %}
+
+                    {% set ns = namespace(is_fk=false, fk_api='', fk_col='') %}
+                    {% for fk in fk_cols %}
+                    {% if fk.col.name == col.name %}{% set ns.is_fk = true %}{% set ns.fk_api = fk.api %}{% set ns.fk_col = fk.col.name %}{% endif %}
+                    {% endfor %}
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            {{ col.name }}
+                            {% if col.nullable is defined and col.nullable == false %}<span class="text-red-500 ml-0.5">*</span>{% endif %}
+                        </label>
+
+                        {% if ns.is_fk %}
+                        <!-- FK dropdown: fetched from /api/{{ ns.fk_api }} -->
+                        <select x-model="form.{{ col.name }}"
+                                class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition bg-white"
+                                {% if col.nullable is defined and col.nullable == false %}required{% endif %}>
+                            <option value="">— Select {{ ns.fk_api }} —</option>
+                            <template x-for="opt in (fkOptions['{{ col.name }}'] || [])" :key="opt.value">
+                                <option :value="opt.value"
+                                        :selected="form.{{ col.name }} == opt.value"
+                                        x-text="opt.label">
+                                </option>
+                            </template>
+                        </select>
+
+                        {% elif col.type == 'boolean' %}
+                        <select x-model="form.{{ col.name }}"
+                                class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition bg-white">
+                            <option value="">— Select —</option>
+                            <option value="1">Yes</option>
+                            <option value="0">No</option>
+                        </select>
+
+                        {% elif col.type in ['text', 'json'] %}
+                        <textarea rows="3" x-model="form.{{ col.name }}"
+                                  class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition resize-none"
+                                  {% if col.nullable is defined and col.nullable == false %}required{% endif %}></textarea>
+
+                        {% elif col.type in ['date', 'datetime'] %}
+                        <input type="{{ 'datetime-local' if col.type == 'datetime' else 'date' }}"
+                               x-model="form.{{ col.name }}"
+                               class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+                               {% if col.nullable is defined and col.nullable == false %}required{% endif %}>
+
+                        {% elif col.type in ['integer', 'bigInteger', 'decimal', 'float'] %}
+                        <input type="number" x-model="form.{{ col.name }}"
+                               class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+                               {% if col.type in ['decimal', 'float'] %}step="0.01"{% endif %}
+                               {% if col.nullable is defined and col.nullable == false %}required{% endif %}>
+
+                        {% else %}
+                        <input type="text" x-model="form.{{ col.name }}"
+                               class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+                               {% if col.nullable is defined and col.nullable == false %}required{% endif %}>
+                        {% endif %}
+                    </div>
+
+                    {% endif %}
+                    {% endfor %}
+
+                    <!-- Actions -->
+                    <div class="pt-4 flex justify-end gap-3 border-t border-gray-100">
+                        <button type="button" @click="isModalOpen = false"
+                                class="px-4 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium">
+                            Cancel
+                        </button>
+                        <button type="submit" :disabled="isSaving"
+                                class="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors font-medium shadow-sm flex items-center gap-2">
+                            <svg x-show="isSaving" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                            <span x-text="isSaving ? 'Saving…' : (editingId ? 'Update' : 'Create')"></span>
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
-    </main>
+    </div>
 
-    <script>
-        function crudData() {
-            return {
-                items: [],
-                search: '',
-                page: 1,
-                limit: 10,
-                totalPages: 1,
-                isModalOpen: false,
-                isSaving: false,
-                editingId: null,
-                form: {},
-                
-                async fetchData() {
-                    try {
-                        const res = await fetch(`/api/{{ to_kebab(model.name) }}?page=${this.page}&limit=${this.limit}&search=${this.search}`);
-                        const json = await res.json();
-                        this.items = json.data || json;
-                        if (json.total_pages) {
-                            this.totalPages = json.total_pages;
-                        }
-                    } catch (e) {
-                        console.error("Fetch error", e);
-                    }
-                },
-                
-                async saveItem() {
-                    this.isSaving = true;
-                    const method = this.editingId ? 'PUT' : 'POST';
-                    const url = this.editingId ? `/api/{{ to_kebab(model.name) }}/${this.editingId}` : `/api/{{ to_kebab(model.name) }}`;
-                    try {
-                        await fetch(url, {
-                            method,
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.form)
-                        });
-                        this.isModalOpen = false;
-                        this.fetchData();
-                    } catch (e) {
-                        alert("Error saving data");
-                    } finally {
-                        this.isSaving = false;
-                    }
-                },
-                
-                async deleteItem(id) {
-                    if (!confirm("Are you sure you want to delete this record? This action cannot be undone.")) return;
-                    try {
-                        await fetch(`/api/{{ to_kebab(model.name) }}/${id}`, { method: 'DELETE' });
-                        this.fetchData();
-                    } catch (e) {
-                        alert("Error deleting data");
-                    }
-                },
-                
-                openModal(item = null) {
-                    if (item) {
-                        this.editingId = item.id;
-                        this.form = JSON.parse(JSON.stringify(item));
-                    } else {
-                        this.editingId = null;
-                        this.form = {};
-                    }
-                    this.isModalOpen = true;
-                },
-                
-                nextPage() {
-                    if (this.page < this.totalPages) {
-                        this.page++;
-                        this.fetchData();
-                    }
-                },
-                
-                prevPage() {
-                    if (this.page > 1) {
-                        this.page--;
-                        this.fetchData();
-                    }
-                },
-                
-                init() {
-                    this.fetchData();
-                }
-            }
-        }
-    </script>
-    <style>
-        [x-cloak] { display: none !important; }
-    </style>
+    <!-- ── Toast ────────────────────────────────────────────────────── -->
+    <div class="fixed bottom-5 right-5 z-[999] space-y-2" x-cloak>
+        <template x-for="t in $store.toast.toasts" :key="t.id">
+            <div x-transition
+                 :class="t.type === 'error' ? 'bg-red-600' : 'bg-emerald-600'"
+                 class="text-white text-sm px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 min-w-[220px]">
+                <span x-text="t.msg" class="flex-1"></span>
+                <button @click="$store.toast.dismiss(t.id)" class="opacity-70 hover:opacity-100 text-lg leading-none">✕</button>
+            </div>
+        </template>
+    </div>
+
 </body>
 </html>
