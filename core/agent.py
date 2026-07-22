@@ -11,9 +11,9 @@ from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import SystemMessage
 from langchain_core.callbacks import BaseCallbackHandler
-
+from langchain_core.globals import set_debug
 from core.logger import log_internal_step, log_token_usage
-
+# set_debug(True)
 
 
 # ---------------------------------------------------------------------------
@@ -167,12 +167,14 @@ class AgentLoggingCallback(BaseCallbackHandler):
             tool_name = serialized.get("name", "unknown")
             args = json.loads(input_str) if isinstance(input_str, str) else input_str
             log_internal_step("tool_start", {"tool_name": tool_name, "args": args})
+            print(f"🛠️ [Tool Call]: {tool_name} {args}")
         except Exception:
             pass
 
     def on_tool_end(self, output, **kwargs):
         try:
             log_internal_step("tool_end", {"output": str(output)[:1000]})
+            print(f"✅ [Tool Result]: {str(output)[:1000]}")
         except Exception:
             pass
 

@@ -5,6 +5,7 @@ import os
 def read_file_content(filepath: str) -> str:
     """Reads the content of a file."""
     try:
+        
         with open(filepath, 'r') as f:
             return f.read()
     except Exception as e:

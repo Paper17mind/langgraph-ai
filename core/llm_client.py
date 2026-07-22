@@ -81,7 +81,7 @@ class LLMClient:
             try:
                 chat_completion = self.groq_client.chat.completions.create(
                     messages=messages,
-                    model="llama-3.3-70b-versatile", # Fast and lightweight model
+                    model=use_model if use_model != None else "llama-3.3-70b-versatile", # Fast and lightweight model
                     temperature=0.0
                 )
                 response_text = chat_completion.choices[0].message.content.strip()

@@ -3,6 +3,7 @@ core/logs/*
 __pycache__/
 .env
 *.db
+package-*.json
 file_baru.txt
 skills/__pycache__/
 interfaces/__pycache__/
