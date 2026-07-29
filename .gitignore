@@ -7,6 +7,7 @@ package-*.json
 file_baru.txt
 skills/__pycache__/
 interfaces/__pycache__/
+interfaces/*.json
 memory_store/*
 guidelines/*
 scratch/*

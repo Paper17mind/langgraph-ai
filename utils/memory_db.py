@@ -44,12 +44,16 @@ class MemoryDB:
         """Searches for relevant facts in the database."""
         try:
             self._init_db()
-            results = self._vector_store.similarity_search(query, k=k)
+            results = self._vector_store.similarity_search_with_score(query, k=k)
             if not results:
                 return "Tidak ada memori yang relevan ditemukan."
             
-            facts = [doc.page_content for doc in results]
-            return "Memori terkait yang ditemukan:\n" + "\n".join(f"- {f}" for f in facts)
+            formatted_facts = []
+            for doc, score in results:
+                if score < 1:
+                    formatted_facts.append(f"- {doc.page_content} (Distance: {score:.4f})")
+                
+            return "Memori terkait yang ditemukan:\n" + "\n".join(formatted_facts)
         except Exception as e:
             return f"Gagal mencari memori: {e}"
 

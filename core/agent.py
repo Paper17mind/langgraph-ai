@@ -1,5 +1,6 @@
 import os
 import json
+import time
 
 from dotenv import load_dotenv
 load_dotenv()  # Load .env SEBELUM import tools
@@ -8,12 +9,20 @@ from core.dynamic_prompt import build_dynamic_prompt
 from core.dynamic_tools import load_all_tools, select_relevant_tools
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import SystemMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.globals import set_debug
 from core.logger import log_internal_step, log_token_usage
-# set_debug(True)
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.console import Console
+from rich.panel import Panel
+from rich.spinner import Spinner
+from rich.text import Text
+
+console = Console()
 
 
 # ---------------------------------------------------------------------------
@@ -71,16 +80,25 @@ def init_llm():
             api_key=ninerouter_key,
             base_url=base_url,
             model=ninerouter_model,
+            streaming=True,
             temperature=0.4,
-            timeout=30,
+            timeout=600,
             max_retries=1,
+            extra_body={
+                "options": {
+                    "num_ctx": 8192
+                }
+            },
+            model_kwargs={
+                "stream_options": {"include_usage": True}
+            }
         )
         if groq_key:
             groq_llm = ChatGroq(
                 api_key=groq_key,
                 model_name="llama-3.3-70b-versatile",
                 temperature=0.4,
-                timeout=30,
+                timeout=300,
                 max_retries=1,
             )
             llm = llm.with_fallbacks([groq_llm])
@@ -91,7 +109,7 @@ def init_llm():
             api_key=groq_key,
             model_name="llama-3.3-70b-versatile",
             temperature=0.4,
-            timeout=30,
+            timeout=300,
             max_retries=1,
         )
 
@@ -105,9 +123,81 @@ def init_llm():
 # Logging callback
 # ---------------------------------------------------------------------------
 
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.1f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours}h {minutes}m {secs:.1f}s"
+
+class TimerSpinner:
+    def __init__(self, get_start_time):
+        self.get_start_time = get_start_time
+        self.spinner = Spinner("dots")
+        
+    def __rich__(self):
+        elapsed = time.time() - self.get_start_time()
+        formatted_time = format_duration(elapsed)
+        self.spinner.text = Text.from_markup(f"[cyan]Thinking... {formatted_time}[/]")
+        return self.spinner
+
+
 class AgentLoggingCallback(BaseCallbackHandler):
+    def __init__(self):
+        self.live = None
+        self.current_text = ""
+        self.last_tool_name = "unknown"
+        self.has_started_streaming = False
+        self.start_time = time.time()
+
+    def reset_timer(self):
+        """Dipanggil setiap kali user mengirim pesan baru untuk mengukur total waktu."""
+        self.start_time = time.time()
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        self.current_text = ""
+        self.has_started_streaming = False
+        self.live = Live(TimerSpinner(lambda: self.start_time), console=console, refresh_per_second=15, transient=False)
+        self.live.start()
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        """Dipanggil setiap kali ada token baru dari LLM (streaming)."""
+        self.current_text += token
+        if self.live:
+            if not self.current_text.strip():
+                return
+                
+            if not self.has_started_streaming:
+                self.has_started_streaming = True
+            
+            elapsed = time.time() - self.start_time
+            formatted_time = format_duration(elapsed)
+            self.live.update(Panel(Markdown(self.current_text), title="Response", subtitle=f"⏱️ {formatted_time}", subtitle_align="right", border_style="blue"))
+
+    def reset(self):
+        """Paksa hentikan Live display — dipanggil saat KeyboardInterrupt."""
+        if self.live:
+            try:
+                self.live.stop()
+            except Exception:
+                pass
+            finally:
+                self.live = None
+        self.current_text = ""
+
     def on_llm_end(self, response, **kwargs):
         """Called when any LLM (including ChatModels) finishes generating."""
+        if self.live:
+            if not self.current_text.strip():
+                self.live.update("")
+            self.live.stop()
+            self.live = None
         try:
             # Extract token usage - try multiple locations
             usage = None
@@ -129,14 +219,27 @@ class AgentLoggingCallback(BaseCallbackHandler):
                     }
 
                 # 3. usage_metadata on the message (newer LangChain ChatGeneration)
-                if not usage:
+                if not usage or usage.get("total_tokens", 0) == 0:
                     message = getattr(gen, "message", None)
                     meta = getattr(message, "usage_metadata", None) if message else None
-                    if meta:
+                    if isinstance(meta, dict) and meta:
                         usage = {
-                            "prompt_tokens": getattr(meta, "input_tokens", 0),
-                            "completion_tokens": getattr(meta, "output_tokens", 0),
-                            "total_tokens": getattr(meta, "total_tokens", 0),
+                            "prompt_tokens": meta.get("input_tokens", 0),
+                            "completion_tokens": meta.get("output_tokens", 0),
+                            "total_tokens": meta.get("total_tokens", 0),
+                        }
+
+                # 4. Ollama specific in message.response_metadata
+                if not usage or usage.get("total_tokens", 0) == 0:
+                    message = getattr(gen, "message", None)
+                    resp_meta = getattr(message, "response_metadata", {}) if message else {}
+                    if "prompt_eval_count" in resp_meta or "eval_count" in resp_meta:
+                        p_count = resp_meta.get("prompt_eval_count", 0)
+                        c_count = resp_meta.get("eval_count", 0)
+                        usage = {
+                            "prompt_tokens": p_count,
+                            "completion_tokens": c_count,
+                            "total_tokens": p_count + c_count
                         }
 
             if usage:
@@ -165,17 +268,19 @@ class AgentLoggingCallback(BaseCallbackHandler):
     def on_tool_start(self, serialized, input_str, **kwargs):
         try:
             tool_name = serialized.get("name", "unknown")
+            self.last_tool_name = tool_name
             args = json.loads(input_str) if isinstance(input_str, str) else input_str
             log_internal_step("tool_start", {"tool_name": tool_name, "args": args})
-            print(f"🛠️ [Tool Call]: {tool_name} {args}")
+            console.print(f"\n[bold yellow]🛠️ [Tool Start]:[/] {tool_name} {args}")
         except Exception:
             pass
 
     def on_tool_end(self, output, **kwargs):
         try:
             log_internal_step("tool_end", {"output": str(output)[:1000]})
-            print(f"✅ [Tool Result]: {str(output)[:1000]}")
-        except Exception:
+            tool_name = kwargs.get("name", getattr(self, "last_tool_name", "Tool"))
+            console.print(Panel(str(output)[:1000], title=f"✅ Result: {tool_name}", border_style="orange3"))
+        except Exception as e:
             pass
 
 
@@ -187,17 +292,21 @@ global_callbacks = [AgentLoggingCallback()]
 
 def get_agent_executor(active_project: str = None, user_query: str = None):
     current_tools = load_all_tools()
-    if user_query:
-        current_tools = select_relevant_tools(current_tools, user_query)
+    # if user_query:
+    #     current_tools = select_relevant_tools(current_tools, user_query)
 
     current_llm = init_llm()
 
     final_prompt = build_dynamic_prompt(active_project=active_project, user_query=user_query)
 
+    # Injeksi daftar tools secara dinamis agar model tahu apa saja tools-nya jika ditanya
+    tool_list_str = "\n".join([f"- **{t.name}**: {t.description}" for t in current_tools])
+    final_prompt += f"\n\n[DAFTAR TOOLS AKTIF]\nBerikut adalah fungsi (tools) yang bisa kamu gunakan. Jika user bertanya tentang tools atau kemampuanmu, bacakan daftar ini secara santai:\n{tool_list_str}\n"
+
     memories = retrieve_memories(user_query) if user_query else ""
     if memories:
         final_prompt += f"\n\n[INGATAN MASA LALU (ChromaDB)]\n{memories}\n"
-
+    print(f"memories {memories}")
     return create_react_agent(
         model=current_llm.with_config(callbacks=global_callbacks),
         tools=current_tools,

@@ -15,7 +15,7 @@ def truncate_or_save(content: str, max_length: int = 2000, context_name: str = "
         
     # Generate a safe filename
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    logs_dir = os.path.join(base_dir, "logs")
+    logs_dir = os.path.join(base_dir, "logs/context")
     os.makedirs(logs_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -27,7 +27,7 @@ def truncate_or_save(content: str, max_length: int = 2000, context_name: str = "
             f.write(content)
             
         preview = content[:max_length]
-        warning = f"\n\n... [OUTPUT TRUNCATED: Panjang teks melebihi {max_length} karakter. Data asli yang lengkap telah disimpan di {filepath}. Jika Anda butuh melihat detail lengkapnya, Anda bisa membacanya menggunakan tool file reader.]"
+        warning = f"\n\n... [TRUNCATED: Output saved at {filepath}]"
         
         return preview + warning
     except Exception as e:

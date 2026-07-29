@@ -154,48 +154,32 @@ def run_cli_bot():
             
             final_message = ""
             
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                task = progress.add_task("[cyan]Thinking...", total=None)
-                # Get fresh agent executor (Hot Reload)
-                from core.agent import global_callbacks
-                agent_executor = get_agent_executor(active_project=active_project, user_query=text)
-                
-                # Stream the agent's steps
-                for event in agent_executor.stream(
-                    {"messages": messages}, 
-                    config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
-                ):
-                    for key, value in event.items():
-                        # key is the node name (e.g., 'Supervisor', 'Coder', 'PM', 'QC')
-                        progress.console.print(f"[bold magenta]🤖 Node Finished:[/] {key}")
+            # Get fresh agent executor (Hot Reload)
+            from core.agent import global_callbacks
+            global_callbacks[0].reset_timer()
+            agent_executor = get_agent_executor(active_project=active_project, user_query=text)
+            
+            # Stream the agent's steps
+            for event in agent_executor.stream(
+                {"messages": messages}, 
+                config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
+            ):
+                for key, value in event.items():
+                    # key is the node name (e.g., 'Supervisor', 'Coder', 'PM', 'QC')
+                    console.print(f"[bold magenta]🤖 Node Finished:[/] {key}")
+                    
+                    if "next" in value:
+                        console.print(f"[bold blue]🔀 Routing to:[/] {value['next']}")
                         
-                        if "next" in value:
-                            progress.console.print(f"[bold blue]🔀 Routing to:[/] {value['next']}")
+                    if "messages" in value:
+                        agent_msgs = value.get("messages", [])
+                        if not isinstance(agent_msgs, list):
+                            agent_msgs = [agent_msgs]
                             
-                        if "messages" in value:
-                            agent_msgs = value.get("messages", [])
-                            if not isinstance(agent_msgs, list):
-                                agent_msgs = [agent_msgs]
-                                
-                            for msg in agent_msgs:
-                                # Print text content
-                                content_preview = str(getattr(msg, "content", "")).strip()
-                                if content_preview:
-                                    progress.console.print(f"   [dim]{content_preview}[/]")
-                                    
-                                # Print tool calls if any
-                                tool_calls = getattr(msg, "tool_calls", [])
-                                if tool_calls:
-                                    for tool in tool_calls:
-                                        progress.console.print(f"   [dim cyan]🛠️  Calling Tool: {tool.get('name', 'unknown')}({tool.get('args', {})})[/]")
-                                    
-                                if getattr(msg, "content", "") and not getattr(msg, "tool_calls", None):
-                                    # Since Supervisor is the brain, we often get the final text from the last node
-                                    final_message = msg.content
+                        for msg in agent_msgs:
+                            # Final message extraction
+                            if getattr(msg, "content", "") and not getattr(msg, "tool_calls", None):
+                                final_message = msg.content
             
             # Save User Message and Assistant Response
             history_manager.add_message(session_id, "user", text)
@@ -204,12 +188,17 @@ def run_cli_bot():
             # Log the request
             log_request("langgraph_agent", text, final_message)
             
-            # Output beautifully using Markdown
-            console.print("\n")
-            console.print(Panel(Markdown(final_message), title="Response", border_style="blue"))
-            
+            # Output sudah di-handle oleh streaming Live Markdown di callback agent.py
+
         except KeyboardInterrupt:
-            break
+            try:
+                from core.agent import global_callbacks
+                if global_callbacks and hasattr(global_callbacks[0], 'reset'):
+                    global_callbacks[0].reset()
+            except Exception:
+                pass
+            console.print("\n[bold yellow]⚠️ Request dibatalkan (Ctrl+C).[/]")
+            continue
         except Exception as e:
             console.print(f"[bold red]Error:[/] {e}")
             
