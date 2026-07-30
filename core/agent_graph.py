@@ -1,228 +1,40 @@
-# agent.py (Plan-and-Execute version)
 import os
 import json
+import time
+import operator
+from typing import TypedDict, List, Annotated, Any
+
 from dotenv import load_dotenv
 load_dotenv()
-from core.llm_client import llm
-from core.dynamic_prompt import build_dynamic_prompt
-from core.dynamic_tools import load_all_tools, select_relevant_tools
+
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Any
+from langgraph.prebuilt import create_react_agent
+from rich.console import Console
+from rich.panel import Panel
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.spinner import Spinner
+from rich.text import Text
 
 from core.logger import log_internal_step, log_token_usage
+from core.dynamic_prompt import build_dynamic_prompt
+from core.dynamic_tools import load_all_tools, select_relevant_tools
 
-# ── Reuse fungsi yang sudah ada ─────────────────────────────────────────────
-from langgraph.graph import StateGraph, END
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
-from typing import TypedDict, List, Annotated
-import operator
+console = Console()
 
-# ── State dengan compressed context ──────────────────────────────────────────
+# ── Environment Helpers ───────────────────────────────────────────────────────
 
-class HybridState(TypedDict):
-    user_input: str
-    active_project: str
-    available_tools: dict
-    
-    messages: List          # full messages (hanya untuk LLM call ini)
-    tool_results: List[str] # ringkasan hasil tool — ini yang dibawa antar step
-    iteration: int          # berapa kali LLM sudah dipanggil
-    max_iterations: int     # batas max (anti infinite loop)
-    final_answer: str
+def _get_env_first(*names, default=""):
+    for name in names:
+        val = os.getenv(name)
+        if val:
+            return val
+    return default
 
-
-# ── Node: LLM decide + call tool ─────────────────────────────────────────────
-
-def llm_node(state: HybridState) -> dict:
-    llm = init_llm().with_config(callbacks=global_callbacks)
-    
-    iteration = state.get("iteration", 0)
-    max_iter = state.get("max_iterations", 5)
-    tool_results = state.get("tool_results", [])
-
-    # ── Bangun prompt — hanya bawa RINGKASAN hasil, bukan full history ────
-    system = build_dynamic_prompt(
-        active_project=state.get("active_project"),
-        user_query=state["user_input"]
-    )
-    
-    # Inject memory
-    memories = retrieve_memories(state["user_input"])
-    if memories:
-        system += f"\n\n[MEMORI]\n{memories}"
-
-    # Inject hasil tool sebelumnya — RINGKAS, bukan full chat history
-    if tool_results:
-        results_summary = "\n".join(f"- {r}" for r in tool_results[-3:])  # max 3 hasil terakhir
-        system += f"\n\n[HASIL TOOL SEBELUMNYA]\n{results_summary}"
-        system += "\n\nLanjutkan berdasarkan hasil di atas. Jika sudah selesai, jawab langsung."
-
-    # Tools yang tersedia
-    tool_list = list(state["available_tools"].keys())
-    system += f"\n\nTools tersedia: {tool_list}"
-    system += "\n\nJika perlu tool, balas dengan format:\nUSE_TOOL: <nama_tool>\nPARAMS: <json params>"
-    system += "\n\nJika sudah bisa jawab langsung, balas dengan:\nFINAL: <jawaban kamu>"
-
-    messages = [
-        SystemMessage(content=system),
-        HumanMessage(content=state["user_input"])
-    ]
-
-    response = llm.invoke(messages)
-    content = response.content.strip()
-
-    print(f"\n🤖 [LLM iter={iteration}]\n{content[:300]}")
-
-    return {
-        "messages": [response],
-        "iteration": iteration + 1,
-        "_llm_output": content  # simpan untuk router
-    }
-
-
-# ── Node: Eksekusi tool ───────────────────────────────────────────────────────
-
-def tool_node(state: HybridState) -> dict:
-    llm_output = state.get("_llm_output", "")
-    tool_results = state.get("tool_results", [])
-
-    try:
-        # Parse USE_TOOL dan PARAMS dari output LLM
-        lines = llm_output.strip().split("\n")
-        tool_name = ""
-        params_str = ""
-        
-        for i, line in enumerate(lines):
-            if line.startswith("USE_TOOL:"):
-                tool_name = line.replace("USE_TOOL:", "").strip()
-            if line.startswith("PARAMS:"):
-                # Ambil semua setelah PARAMS: (bisa multiline JSON)
-                params_str = "\n".join(lines[i:]).replace("PARAMS:", "", 1).strip()
-                break
-
-        if not tool_name:
-            return {"tool_results": tool_results + ["ERROR: LLM tidak specify tool"]}
-
-        # Normalize params
-        params_str = params_str.replace("```json", "").replace("```", "").strip()
-        params = json.loads(params_str) if params_str else {}
-
-        # Auto-fix alias param
-        ALIASES = {
-            "cwd": "working_dir",
-            "dir": "working_dir",
-            "cmd": "command",
-        }
-        for wrong, correct in ALIASES.items():
-            if wrong in params and correct not in params:
-                params[correct] = params.pop(wrong)
-                print(f"🔧 Auto-fix param: '{wrong}' → '{correct}'")
-
-        print(f"\n⚙️  [Tool] {tool_name} | params={params}")
-
-        # Jalankan tool
-        tool_fn = state["available_tools"].get(tool_name)
-        if not tool_fn:
-            result = f"ERROR: Tool '{tool_name}' tidak ada. Tersedia: {list(state['available_tools'].keys())}"
-        else:
-            result = str(tool_fn.invoke(params))
-
-        # ── Yang penting: simpan RINGKASAN, bukan raw output ──────────
-        compressed = compress_tool_result(tool_name, params, result)
-        
-        print(f"   ✅ Result (compressed): {compressed[:200]}")
-        return {"tool_results": tool_results + [compressed]}
-
-    except json.JSONDecodeError as e:
-        error = f"ERROR parse params: {e} | raw: {params_str[:100]}"
-        return {"tool_results": tool_results + [error]}
-    except Exception as e:
-        return {"tool_results": tool_results + [f"ERROR: {e}"]}
-
-
-def compress_tool_result(tool_name: str, params: dict, result: str) -> str:
-    """
-    Compress hasil tool jadi ringkasan singkat.
-    Ini yang dibawa ke LLM berikutnya — bukan raw output yang panjang.
-    """
-    # Kalau error, bawa full error message
-    if result.startswith("ERROR"):
-        return f"{tool_name}: {result}"
-    
-    # Kalau output panjang, potong + summary
-    if len(result) > 500:
-        return f"{tool_name}({params}): [OK] {result[:300]}... [truncated {len(result)} chars]"
-    
-    return f"{tool_name}({params}): {result}"
-
-
-# ── Router: LLM mau tool atau sudah selesai? ─────────────────────────────────
-
-def router(state: HybridState) -> str:
-    llm_output = state.get("_llm_output", "")
-    iteration = state.get("iteration", 0)
-    max_iter = state.get("max_iterations", 5)
-
-    # Batas iterasi
-    if iteration >= max_iter:
-        print(f"\n⛔ Max iterations ({max_iter}) reached")
-        return "summarize"
-
-    if llm_output.startswith("FINAL:"):
-        return "summarize"
-    
-    if "USE_TOOL:" in llm_output:
-        return "tool"
-    
-    # Default: anggap sudah final
-    return "summarize"
-
-
-# ── Node: Summarizer ──────────────────────────────────────────────────────────
-
-def summarizer_node(state: HybridState) -> dict:
-    llm_output = state.get("_llm_output", "")
-    
-    # Kalau LLM sudah kasih FINAL answer, pakai itu langsung — 0 token lagi
-    if llm_output.startswith("FINAL:"):
-        answer = llm_output.replace("FINAL:", "").strip()
-        return {"final_answer": answer}
-    
-    # Kalau kena max iteration, baru panggil LLM untuk wrap up
-    tool_results = state.get("tool_results", [])
-    llm = init_llm().with_config(callbacks=global_callbacks)
-    
-    response = llm.invoke([HumanMessage(
-        content=f"Buat summary dari hasil ini untuk user:\n" + "\n".join(tool_results)
-    )])
-    return {"final_answer": response.content}
-
-
-# ── Build Graph ───────────────────────────────────────────────────────────────
-
-def build_hybrid_graph():
-    graph = StateGraph(HybridState)
-    
-    graph.add_node("llm", llm_node)
-    graph.add_node("tool", tool_node)
-    graph.add_node("summarize", summarizer_node)
-
-    graph.set_entry_point("llm")
-    
-    graph.add_conditional_edges("llm", router, {
-        "tool": "tool",
-        "summarize": "summarize",
-    })
-    
-    # Setelah tool → balik ke LLM, tapi dengan compressed context
-    graph.add_edge("tool", "llm")
-    graph.add_edge("summarize", END)
-
-    return graph.compile()
 def retrieve_memories(query: str, k: int = 3) -> str:
     if not query:
         return ""
@@ -233,62 +45,134 @@ def retrieve_memories(query: str, k: int = 3) -> str:
         print(f"[memory] retrieval failed: {e}")
         return ""
 
+# ── LLM Init ──────────────────────────────────────────────────────────────────
 
-def _get_env_first(*names, default=""):
-    for name in names:
-        val = os.getenv(name)
-        if val:
-            return val
-    return default
+def init_master_llm():
+    """Master LLM menggunakan Groq"""
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise ValueError("GROQ_API_KEY tidak dikonfigurasi di .env")
+    return ChatGroq(
+        api_key=groq_key,
+        model_name="llama-3.3-70b-versatile",
+        temperature=0.4,
+        timeout=300,
+        max_retries=1,
+    )
 
+def init_reviewer_llm():
+    """Reviewer LLM menggunakan Groq model yang lebih hemat token (llama-3.1-8b-instant)"""
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise ValueError("GROQ_API_KEY tidak dikonfigurasi di .env")
+    return ChatGroq(
+        api_key=groq_key,
+        model_name="llama-3.1-8b-instant",
+        temperature=0.1,
+        timeout=300,
+        max_retries=1,
+    )
 
-def init_llm():
-    # Sama persis dengan kode lamamu
-    ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY")
+def init_tools_llm():
+    """Tools LLM menggunakan 9Router / Ollama (dari .env)"""
+    ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY", default="ollama")
     ninerouter_url = _get_env_first(
-        "NINEROUTER_URL", "9ROUTER_URL",
-        default="https://9router.com/api/v1/chat/completions"
+        "NINEROUTER_URL", "9ROUTER_URL", default="http://127.0.0.1:11434/v1/chat/completions"
     )
     base_url = ninerouter_url.replace("/chat/completions", "")
-    ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="google/gemini-pro")
-    groq_key = os.getenv("GROQ_API_KEY", "")
+    ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="hermes3:3b")
 
-    if ninerouter_key:
-        llm = ChatOpenAI(
-            api_key=ninerouter_key,
-            base_url=base_url,
-            model=ninerouter_model,
-            temperature=0.4,
-            timeout=30,
-            max_retries=1,
-        )
-        if groq_key:
-            groq_llm = ChatGroq(
-                api_key=groq_key,
-                model_name="llama-3.3-70b-versatile",
-                temperature=0.4,
-                timeout=30,
-                max_retries=1,
-            )
-            llm = llm.with_fallbacks([groq_llm])
-        return llm
+    return ChatOpenAI(
+        api_key=ninerouter_key,
+        base_url=base_url,
+        model=ninerouter_model,
+        temperature=0.2,
+        timeout=300,
+        max_retries=1,
+    )
 
-    if groq_key:
-        return ChatGroq(
-            api_key=groq_key,
-            model_name="llama-3.3-70b-versatile",
-            temperature=0.4,
-            timeout=30,
-            max_retries=1,
-        )
+# ── Logging callback ──────────────────────────────────────────────────────────
 
-    raise ValueError("No LLM API keys configured.")
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.1f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours}h {minutes}m {secs:.1f}s"
 
-
-# ── Logging callback (sama dengan kode lamamu) ───────────────────────────────
+class TimerSpinner:
+    def __init__(self, get_start_time):
+        self.get_start_time = get_start_time
+        self.spinner = Spinner("dots")
+        
+    def __rich__(self):
+        elapsed = time.time() - self.get_start_time()
+        formatted_time = format_duration(elapsed)
+        self.spinner.text = Text.from_markup(f"[cyan]Thinking... {formatted_time}[/]")
+        return self.spinner
 
 class AgentLoggingCallback(BaseCallbackHandler):
+    def __init__(self):
+        self.live = None
+        self.current_text = ""
+        self.last_tool_name = "unknown"
+        self.has_started_streaming = False
+        self.start_time = time.time()
+
+    def reset_timer(self):
+        self.start_time = time.time()
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        self.current_text = ""
+        self.has_started_streaming = False
+        self.live = Live(TimerSpinner(lambda: self.start_time), console=console, refresh_per_second=15, transient=False)
+        self.live.start()
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.current_text += token
+        if self.live:
+            if not self.current_text.strip():
+                return
+            if not self.has_started_streaming:
+                self.has_started_streaming = True
+            
+            elapsed = time.time() - self.start_time
+            formatted_time = format_duration(elapsed)
+            self.live.update(Panel(Markdown(self.current_text), title="Response", subtitle=f"⏱️ {formatted_time}", subtitle_align="right", border_style="blue"))
+
+    def reset(self):
+        if self.live:
+            try:
+                self.live.stop()
+            except Exception:
+                pass
+            finally:
+                self.live = None
+        self.current_text = ""
+
     def on_llm_end(self, response, **kwargs):
+        final_text = ""
+        if response.generations and len(response.generations) > 0 and len(response.generations[0]) > 0:
+            final_text = response.generations[0][0].text
+            if not final_text:
+                msg = getattr(response.generations[0][0], "message", None)
+                if msg:
+                    final_text = getattr(msg, "content", "")
+
+        if self.live:
+            self.live.stop()
+            self.live = None
+
+        if final_text.strip():
+            elapsed = time.time() - self.start_time
+            formatted_time = format_duration(elapsed)
+            console.print(Panel(Markdown(final_text), title="Response", subtitle=f"⏱️ {formatted_time}", subtitle_align="right", border_style="blue"))
         try:
             usage = None
             if response.llm_output and "token_usage" in response.llm_output:
@@ -308,244 +192,282 @@ class AgentLoggingCallback(BaseCallbackHandler):
                 print(f"\n🪙 [Token Usage] Prompt: {p} | Completion: {c} | Total: {t}")
                 log_token_usage(usage)
         except Exception as e:
-            print(f"[Callback Error] {e}")
+            print(f"[Callback Error] on_llm_end: {e}")
 
     def on_tool_start(self, serialized, input_str, **kwargs):
         try:
             tool_name = serialized.get("name", "unknown")
+            self.last_tool_name = tool_name
             args = json.loads(input_str) if isinstance(input_str, str) else input_str
             log_internal_step("tool_start", {"tool_name": tool_name, "args": args})
+            console.print(f"\n[bold yellow]🛠️ [Tool Start]:[/] {tool_name} {args}")
         except Exception:
             pass
 
     def on_tool_end(self, output, **kwargs):
         try:
             log_internal_step("tool_end", {"output": str(output)[:1000]})
-        except Exception:
+            tool_name = kwargs.get("name", getattr(self, "last_tool_name", "Tool"))
+            console.print(Panel(str(output)[:1000], title=f"✅ Result: {tool_name}", border_style="orange3"))
+        except Exception as e:
             pass
-
 
 global_callbacks = [AgentLoggingCallback()]
 
-
 # ── State ─────────────────────────────────────────────────────────────────────
+
 class AgentState(TypedDict):
-    user_input: str
+    messages: Annotated[List[BaseMessage], operator.add]
     active_project: str
-    plan: List[dict]
-    results: List[str]
-    summary: str
-    available_tools: dict
-    warnings: List[str]   # ← tambah ini
+    user_query: str
+    intent: str
+    review_status: str
+    retry_count: int
 
+# ── Nodes ─────────────────────────────────────────────────────────────────────
 
-# ── Node 1: PLANNER (1x LLM call) ────────────────────────────────────────────
-
-def planner_node(state: AgentState) -> dict:
-    user_input = state["user_input"]
-    tool_names = list(state["available_tools"].keys())
-    system_prompt = ""
-
-    planner_prompt = f"""
-Kamu adalah planner AI. Buat execution plan untuk permintaan user.
-
-Tools yang tersedia: {json.dumps(tool_names)}
-
-RULES:
-- Jika perlu tool → list step dengan action = nama tool
-- Output HANYA JSON array, tanpa penjelasan apapun
-- Jika tools tidak ada, buat script yang bisa dijalankan di terminal, kemudian jalankan script tersebut dengan tool execute_system_command
-- Jangan jawab user secara langsung, selalu gunakan tool
-
-Contoh output:
-[
-  {{"step": 1, "action": "read_file", "params": {{"path": "data.txt"}}}},
-  {{"step": 2, "action": "summarize_text", "params": {{"text": "{{result_step_1}}"}}}}
-]
-
-Permintaan user: {user_input}
-"""
-
-    content = llm.ask(user_input, system_prompt)
+def master_intent_node(state: AgentState):
+    """
+    Master LLM memeriksa intent user dan memutuskan apakah butuh tools.
+    """
+    print("\n🧠 [Master Node] Mengevaluasi Intent...")
+    llm = init_master_llm().with_config(callbacks=global_callbacks)
     
+    # Ambil pesan terakhir dari user
+    user_query = state.get("user_query")
+    if not user_query and state.get("messages"):
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                user_query = msg.content
+                break
+        
+    system = build_dynamic_prompt(
+        active_project=state.get("active_project"),
+        user_query=user_query
+    )
+    
+    memories = retrieve_memories(user_query)
+    if memories:
+        system += f"\n\n[MEMORI]\n{memories}"
+        
+    # Format chat history for context
+    chat_history = ""
+    if state.get("messages") and len(state["messages"]) > 1:
+        chat_history = "Riwayat Percakapan Sebelumnya:\n"
+        # Ambil maksimal 4 pesan terakhir agar tidak terlalu panjang
+        recent_msgs = state["messages"][-5:-1]
+        for msg in recent_msgs:
+            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+            # Potong pesan jika terlalu panjang (khususnya untuk log riwayat tool)
+            content = str(msg.content)
+            if len(content) > 1000:
+                content = content[:1000] + "... [dipotong]"
+            chat_history += f"[{role}]: {content}\n"
+            
+    prompt = f"""
+{system}
 
-    # Parse JSON, bersihkan kalau ada markdown fence
-    content = content.replace("```json", "").replace("```", "").strip()
-    try:
-        plan = json.loads(content)
-    except json.JSONDecodeError:
-        # Fallback: direct answer kalau JSON gagal parse
-        plan = [{"step": 1, "action": "direct_answer", "params": {"query": user_input}}]
+{chat_history}
 
-    print(f"\n📋 [Plan] {json.dumps(plan, indent=2, ensure_ascii=False)}")
-    return {"plan": plan}
+Tugas Utama Anda: 
+Analisis permintaan pengguna terbaru berikut berdasarkan konteks riwayat percakapan.
+Jika permintaan tersebut memerlukan tindakan eksternal / penggunaan tools (misalnya: membaca file yang disebutkan sebelumnya, menjalankan script, eksekusi shell command, melakukan operasi pada sistem, dsb), balas HANYA dengan format:
+"USE_TOOLS: <rencana singkat apa yang harus dilakukan>"
 
+PENTING: Jika pengguna merujuk pada sesuatu yang dikerjakan sebelumnya ("file yang tadi", "script yang baru dibuat", dll), Anda WAJIB menggunakan tool untuk membaca/mengecek file tersebut jika Anda belum tahu isinya!
 
-# ── Node 2: EXECUTOR (0x LLM call, jalan lokal) ──────────────────────────────
+Jika permintaan hanya percakapan biasa atau Anda bisa langsung menjawabnya dari memori/riwayat di atas tanpa alat bantuan apa pun, berikan jawaban langsung kepada pengguna (jangan menggunakan format USE_TOOLS).
 
-def executor_node(state: AgentState) -> dict:
-    results = []
-    last_result = ""
+Permintaan User Terbaru: {user_query}
+"""
+    response = llm.invoke([HumanMessage(content=prompt)])
+    
+    return {"intent": response.content}
 
-    for step in state["plan"]:
-        action = step.get("action", "")
-        params = step.get("params", {})
-        step_num = step.get("step", "?")
-        status = step.get("_status", "OK")
+def router(state: AgentState):
+    intent_val = state.get("intent", "")
+    if "USE_TOOLS" in intent_val:
+        return "tool_worker"
+    return "summarizer"
 
-        # ── Skip step yang bermasalah ─────────────────────────────────
-        if status == "SKIP":
-            issue = step.get("_issue", "unknown")
-            result = f"SKIPPED: {issue}"
-            print(f"\n⏭️  [Step {step_num}] SKIP — {issue}")
-            results.append(f"Step {step_num} ({action}): {result}")
-            continue
+def tool_worker_node(state: AgentState):
+    """
+    Menggunakan Tools LLM (9Router) dengan mekanisme ReAct agent
+    untuk mengeksekusi instruksi dari Master.
+    """
+    print("\n🛠️ [Worker Node] Menjalankan Tools...")
+    tools_llm = init_tools_llm().with_config(callbacks=global_callbacks)
+    
+    user_query = state.get("user_query")
+    if not user_query and state.get("messages"):
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                user_query = msg.content
+                break
+                
+    current_tools = load_all_tools()
+    intent_plan = state.get("intent", "").replace("USE_TOOLS:", "").strip()
+    
+    react_agent = create_react_agent(
+        model=tools_llm,
+        tools=current_tools,
+        prompt=SystemMessage(content=f"""Anda adalah Agen Pekerja (Tool Executor).
+Fokus utama Anda adalah menjalankan tools untuk menyelesaikan masalah.
 
-        # ── Step butuh konfirmasi manual ──────────────────────────────
-        if status == "NEEDS_CONFIRMATION":
-            issue = step.get("_issue", "")
-            result = f"NEEDS_CONFIRMATION: {issue}"
-            print(f"\n❓ [Step {step_num}] PERLU KONFIRMASI — {issue}")
-            results.append(f"Step {step_num} ({action}): {result}")
-            continue
+Pesan Asli User: {user_query}
+Rencana / Instruksi dari Master: {intent_plan}
 
-        # Kalau ada fix, info ke user
-        if "_fix" in step:
-            print(f"\n🔧 [Step {step_num}] {step['_fix']}")
+PENTING UNTUK DIPERHATIKAN:
+- JANGAN pernah menuliskan blok JSON secara manual di dalam teks respons Anda (seperti `{{ "name": "write_code_to_file", ... }}`).
+- Anda WAJIB memanggil tools menggunakan mekanisme 'Function Calling' / 'Tool Calling' bawaan (native tool calls).
+- Jika Anda tidak memanggil tools secara native, tindakan Anda tidak akan tereksekusi!
 
-        # Inject hasil step sebelumnya
-        params = {
-            k: v.replace("{result_step_" + str(step_num - 1) + "}", last_result)
-            if isinstance(v, str) else v
-            for k, v in params.items()
+Jalankan tools yang sesuai dan berikan kesimpulan akhir tindakan Anda.""")
+    )
+    
+    worker_messages = [HumanMessage(content=user_query)]
+    if state.get("review_status") == "REJECTED" and len(state.get("messages", [])) >= 2:
+        worker_messages.append(state["messages"][-2]) # AIMessage dari worker sebelumnya
+        worker_messages.append(state["messages"][-1]) # HumanMessage feedback dari reviewer
+
+    result = react_agent.invoke({"messages": worker_messages})
+    final_output = result["messages"][-1].content
+    
+    # Kumpulkan riwayat pemanggilan tool untuk diaudit oleh reviewer
+    tools_called = []
+    for msg in result["messages"][len(worker_messages):]:
+        if getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                tools_called.append(f"- {tc['name']}: {tc['args']}")
+                
+    audit_trail = "\n".join(tools_called) if tools_called else "TIDAK ADA TOOL YANG DIPANGGIL."
+    
+    return {"messages": [AIMessage(content=f"[Riwayat Tools]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")]}
+
+def reviewer_node(state: AgentState):
+    """
+    Mengevaluasi hasil dari tool_worker_node menggunakan Groq llama-3.1-8b-instant.
+    """
+    print("\n🔍 [Reviewer Node] Mengevaluasi Pekerjaan Worker...")
+    llm = init_reviewer_llm()
+    
+    retry_count = state.get("retry_count", 0)
+    if retry_count >= 3:
+        print("⚠️ [Reviewer] Batas maksimum retry tercapai. Lanjut ke summarizer.")
+        return {"review_status": "APPROVED", "retry_count": retry_count}
+        
+    worker_result = state["messages"][-1].content
+    user_query = state.get("user_query")
+    intent_plan = state.get("intent", "")
+    
+    prompt = f"""
+Tugas Anda adalah mengevaluasi hasil kerja (Tool Worker) berdasarkan permintaan pengguna.
+Anda harus bersikap SANGAT TEGAS. Pastikan Worker benar-benar memanggil tool yang diperlukan, bukan sekadar berhalusinasi atau memberikan jawaban teoritis tanpa bertindak.
+
+Permintaan Pengguna: {user_query}
+Instruksi/Rencana: {intent_plan}
+
+Laporan Eksekusi Worker: 
+{worker_result}
+
+EVALUASI KRITIS:
+1. Apakah instruksi mensyaratkan Worker untuk melakukan tindakan fisik (menyimpan file, membaca file, mencari web, dll)?
+2. Jika YA, periksa [Riwayat Tools] di atas. Apakah tertulis "TIDAK ADA TOOL YANG DIPANGGIL."? Jika ya, berarti Worker GAGAL/BERHALUSINASI, dan Anda wajib melakukan REJECT!
+3. Jika Worker hanya berkata "Saya telah menyimpannya" tapi di [Riwayat Tools] kosong, itu adalah halusinasi. Tolak!
+
+Jika BERHASIL/BENAR (tools dipanggil dengan benar atau permintaan tidak butuh tool spesifik), balas HANYA dengan: "STATUS: APPROVED"
+Jika GAGAL/HALUSINASI, balas dengan: "STATUS: REJECTED" dan di baris berikutnya tuliskan instruksi/marahan spesifik apa yang harus diperbaiki oleh Worker (misal: "Anda tidak menggunakan tool apapun! Gunakan tool write_file untuk menyimpan script tersebut!").
+"""
+    response = llm.invoke([HumanMessage(content=prompt)])
+    content = response.content.strip()
+    
+    if content.startswith("STATUS: APPROVED"):
+        print("✅ [Reviewer] Hasil disetujui.")
+        return {"review_status": "APPROVED", "retry_count": retry_count}
+    else:
+        feedback = content.replace("STATUS: REJECTED", "").strip()
+        print(f"❌ [Reviewer] Hasil ditolak. Feedback: {feedback}")
+        return {
+            "review_status": "REJECTED", 
+            "retry_count": retry_count + 1,
+            "messages": [HumanMessage(content=f"[Koreksi dari Reviewer]:\n{feedback}")]
         }
 
-        print(f"\n⚙️  [Step {step_num}] action={action} params={params}")
+def reviewer_router(state: AgentState):
+    status = state.get("review_status", "")
+    if status == "REJECTED":
+        return "tool_worker"
+    return "summarizer"
 
-        if action == "direct_answer":
-            result = f"DIRECT: {params.get('query', '')}"
-        elif action in state["available_tools"]:
-            tool_fn = state["available_tools"][action]
-            try:
-                result = str(tool_fn.invoke(params))
-            except Exception as e:
-                result = f"ERROR: {e}"
-                print(f"   ❌ Tool error: {e}")
-        else:
-            result = f"Tool '{action}' tidak ditemukan"
+def summarizer_node(state: AgentState):
+    """
+    Master LLM memberikan format hasil akhir yang natural kepada user.
+    """
+    intent_val = state.get("intent", "")
+    
+    if "USE_TOOLS" not in intent_val:
+        # Jika Master langsung merespons tanpa tools
+        return {"messages": [AIMessage(content=intent_val)]}
+        
+    print("\n📝 [Summarizer Node] Memformulasikan Jawaban Akhir...")
+    llm = init_tools_llm().with_config(callbacks=global_callbacks)
+    
+    user_query = state.get("user_query")
+    if not user_query and state.get("messages"):
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                user_query = msg.content
+                break
+                
+    worker_result = state["messages"][-1].content
+    
+    prompt = f"""
+Anda adalah Asisten AI Utama (Master).
+Berikut adalah ringkasan tindakan yang baru saja diselesaikan oleh sub-agen pekerja (Tool Worker) Anda untuk menjawab pertanyaan pengguna.
 
-        results.append(f"Step {step_num} ({action}): {result}")
-        last_result = result
+Pertanyaan Pengguna: "{user_query}"
+Laporan Pekerja: 
+{worker_result}
 
-    return {"results": results}
-
-
-# ── Node 3: SUMMARIZER (1x LLM call) ─────────────────────────────────────────
-
-def summarizer_node(state: AgentState) -> dict:
-    llm = init_llm().with_config(callbacks=global_callbacks)
-
-    results_text = "\n".join(state["results"])
-    user_input = state["user_input"]
-
-    # Kalau direct answer, LLM jawab langsung dengan konteks penuh
-    is_direct = any("DIRECT:" in r for r in state["results"])
-
-    if is_direct:
-        prompt = f"Jawab pertanyaan user secara langsung dan helpful.\n\nPertanyaan: {user_input}"
-    else:
-        prompt = f"""Berikut hasil eksekusi untuk permintaan: "{user_input}"
-
-{results_text}
-
-Buat summary yang jelas dan actionable untuk user. Highlight hal penting.
+Tugas Anda:
+Sampaikan hasil ini kepada pengguna dengan bahasa yang natural, ramah, dan ringkas. JANGAN menyebutkan hal-hal teknis mengenai "pekerja" atau "sub-agen", anggap Anda sendiri yang telah menyelesaikannya.
 """
-
     response = llm.invoke([HumanMessage(content=prompt)])
-    summary = response.content
-    print(f"\n✅ [Summary] {summary[:200]}...")
-    return {"summary": summary}
+    
+    return {"messages": [response]}
 
 
-# ── Build Graph ───────────────────────────────────────────────────────────────
+# ── Graph Building ────────────────────────────────────────────────────────────
 
-# Di AgentState, tambah field warnings
-class AgentState(TypedDict):
-    user_input: str
-    active_project: str
-    plan: List[dict]
-    results: List[str]
-    summary: str
-    available_tools: dict
-    warnings: List[str]   # ← tambah ini
-
-# Di build_graph()
 def build_graph():
     graph = StateGraph(AgentState)
-    graph.add_node("planner", planner_node)
-    graph.add_node("verifier", verifier_node)   # ← tambah ini
-    graph.add_node("executor", executor_node)
+    
+    graph.add_node("master_intent", master_intent_node)
+    graph.add_node("tool_worker", tool_worker_node)
+    graph.add_node("reviewer", reviewer_node)
     graph.add_node("summarizer", summarizer_node)
-
-    graph.set_entry_point("planner")
-    graph.add_edge("planner", "verifier")       # ← planner → verifier
-    graph.add_edge("verifier", "executor")      # ← verifier → executor
-    graph.add_edge("executor", END)
-    # graph.add_edge("executor", "summarizer")
-    # graph.add_edge("summarizer", END)
-
+    
+    graph.set_entry_point("master_intent")
+    
+    graph.add_conditional_edges("master_intent", router, {
+        "tool_worker": "tool_worker",
+        "summarizer": "summarizer"
+    })
+    
+    graph.add_edge("tool_worker", "reviewer")
+    
+    graph.add_conditional_edges("reviewer", reviewer_router, {
+        "tool_worker": "tool_worker",
+        "summarizer": "summarizer"
+    })
+    
+    graph.add_edge("summarizer", END)
+    
     return graph.compile()
 
-
-def verifier_node(state: AgentState) -> dict:
-    plan = state["plan"]
-    
-    # Alias mapping — param yang sering salah nama dari LLM
-    PARAM_ALIASES = {
-        "execute_system_command": {
-            "cwd": "working_dir",
-            "dir": "working_dir", 
-            "directory": "working_dir",
-            "work_dir": "working_dir",
-            "cmd": "command",
-            "shell": "command",
-        },
-        # Tambah tool lain kalau ada alias serupa
-    }
-
-    for step in plan:
-        action = step.get("action", "")
-        params = step.get("params", {})
-
-        # ── Auto-rename param alias ───────────────────────────────────
-        if action in PARAM_ALIASES:
-            aliases = PARAM_ALIASES[action]
-            for wrong_key, correct_key in aliases.items():
-                if wrong_key in params and correct_key not in params:
-                    params[correct_key] = params.pop(wrong_key)
-                    step["_fix"] = step.get("_fix", "") + f" | renamed '{wrong_key}'→'{correct_key}'"
-                    print(f"🔧 [Verifier] Step {step['step']}: '{wrong_key}' → '{correct_key}'")
-
-            step["params"] = params  # pastikan update
-
-        # ... sisa verifier logic seperti sebelumnya
-
-    return {"plan": plan, "warnings": []}
-# ── Public API (sama interface dengan versi lama) ─────────────────────────────
-
 def get_agent_executor(active_project: str = None, user_query: str = None):
-    all_tools = load_all_tools()
-    if user_query:
-        all_tools = select_relevant_tools(all_tools, user_query)
+    # Mengembalikan graph yang sudah di-compile.
+    # Karena telegram_bot dkk mungkin mengandalkan input {"messages": [...]},
+    # StateGraph ini kompatibel.
+    return build_graph()
 
-    # Buat dict nama → tool object
-    tools_dict = {tool.name: tool for tool in all_tools}
-
-    return build_graph(), {
-        "user_input": user_query or "",
-        "active_project": active_project or "",
-        "plan": [],
-        "results": [],
-        "summary": "",
-        "available_tools": tools_dict,
-    }

@@ -1,9 +1,15 @@
 import os
 import sys
+
+# Tambahkan path root proyek agar Python bisa menemukan modul 'core'
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import json
 from core import history_manager
 from core.logger import log_request
-from core.agent import get_agent_executor
+from core.agent_graph import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 from rich.console import Console
 from rich.panel import Panel
@@ -155,7 +161,7 @@ def run_cli_bot():
             final_message = ""
             
             # Get fresh agent executor (Hot Reload)
-            from core.agent import global_callbacks
+            from core.agent_graph import global_callbacks
             global_callbacks[0].reset_timer()
             agent_executor = get_agent_executor(active_project=active_project, user_query=text)
             
@@ -192,7 +198,7 @@ def run_cli_bot():
 
         except KeyboardInterrupt:
             try:
-                from core.agent import global_callbacks
+                from core.agent_graph import global_callbacks
                 if global_callbacks and hasattr(global_callbacks[0], 'reset'):
                     global_callbacks[0].reset()
             except Exception:
