@@ -128,19 +128,21 @@ def _wrap_tool_output(tool: BaseTool) -> BaseTool:
         if len(result_str) <= TOOL_OUTPUT_THRESHOLD:
             return result_str
         from datetime import datetime
-        os.makedirs(_LOGS_DIR, exist_ok=True)
+        tool_log_dir = os.path.join(_LOGS_DIR, tool.name)
+        os.makedirs(tool_log_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        fname = f"{tool.name}_{ts}.txt"
-        fpath = os.path.join(_LOGS_DIR, fname)
+        fname = f"{ts}.txt"
+        fpath = os.path.join(tool_log_dir, fname)
         try:
             with open(fpath, "w", encoding="utf-8") as f:
                 f.write(result_str)
         except Exception:
             return result_str  # fallback: return as-is if save fails
         preview = result_str[:300].replace("\n", " ")
+        rel_path = f"logs/{tool.name}/{fname}"
         return (
             f"[Output terlalu panjang: {len(result_str):,} chars]\n"
-            f"✅ Sudah disimpan ke: logs/{fname}\n"
+            f"✅ Sudah disimpan ke: {rel_path}\n"
             f"Preview (300 chars pertama):\n{preview}..."
         )
 

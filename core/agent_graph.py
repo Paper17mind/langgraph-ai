@@ -48,39 +48,44 @@ def retrieve_memories(query: str, k: int = 3) -> str:
 # ── LLM Init ──────────────────────────────────────────────────────────────────
 
 def init_master_llm():
-    """Master LLM menggunakan Groq"""
+    """Master LLM menggunakan Groq (openai/gpt-oss-120b)"""
     groq_key = os.getenv("GROQ_API_KEY", "")
     if not groq_key:
         raise ValueError("GROQ_API_KEY tidak dikonfigurasi di .env")
     return ChatGroq(
         api_key=groq_key,
-        model_name="llama-3.3-70b-versatile",
+        model_name="openai/gpt-oss-120b",
         temperature=0.4,
         timeout=300,
         max_retries=1,
     )
 
 def init_reviewer_llm():
-    """Reviewer LLM menggunakan Groq model yang lebih hemat token (llama-3.1-8b-instant)"""
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    if not groq_key:
-        raise ValueError("GROQ_API_KEY tidak dikonfigurasi di .env")
-    return ChatGroq(
-        api_key=groq_key,
-        model_name="llama-3.1-8b-instant",
+    """Reviewer LLM menggunakan 9Router (antigravity) untuk menghemat quota token Groq"""
+    ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY", default="")
+    ninerouter_url = _get_env_first(
+        "NINEROUTER_URL", "9ROUTER_URL", default="http://localhost:20128/v1/chat/completions"
+    )
+    base_url = ninerouter_url.replace("/chat/completions", "")
+    ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="antigravity")
+
+    return ChatOpenAI(
+        api_key=ninerouter_key,
+        base_url=base_url,
+        model=ninerouter_model,
         temperature=0.1,
         timeout=300,
         max_retries=1,
     )
 
 def init_tools_llm():
-    """Tools LLM menggunakan 9Router / Ollama (dari .env)"""
-    ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY", default="ollama")
+    """Tools LLM menggunakan 9Router (dari .env)"""
+    ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY", default="")
     ninerouter_url = _get_env_first(
-        "NINEROUTER_URL", "9ROUTER_URL", default="http://127.0.0.1:11434/v1/chat/completions"
+        "NINEROUTER_URL", "9ROUTER_URL", default="http://localhost:20128/v1/chat/completions"
     )
     base_url = ninerouter_url.replace("/chat/completions", "")
-    ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="hermes3:3b")
+    ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="antigravity")
 
     return ChatOpenAI(
         api_key=ninerouter_key,

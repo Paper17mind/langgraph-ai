@@ -27,6 +27,10 @@ def write_code_to_file(filename: str, content: str) -> str:
                 "lalu gunakan generate_project_from_schema untuk generate kode dari schema tersebut."
             )
 
+        # Perbaikan untuk model kecil (seperti Qwen/Llama) yang terkadang
+        # mencetak literal "\n" (dua karakter) alih-alih karakter baris baru (newline).
+        content = content.replace("\\n", "\n")
+
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
             

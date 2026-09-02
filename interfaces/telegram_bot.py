@@ -3,7 +3,7 @@ from core import history_manager
 from core import scheduler_db
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from core.agent import get_agent_executor
+from core.agent_graph import get_agent_executor
 from langchain_core.messages import HumanMessage, AIMessage
 
 user_sessions = {}
@@ -144,7 +144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         # Get fresh agent executor (Hot Reload)
         # Create executor dynamically
-        from core.agent import global_callbacks
+        from core.agent_graph import global_callbacks
         agent_executor = get_agent_executor(active_project=active_project, user_query=text)
         
         # Invoke Agent

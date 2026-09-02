@@ -9,8 +9,8 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from langgraph.prebuilt import create_react_agent
 
-# Import existing core functions to reuse them
-from core.agent import load_all_tools, init_llm, SYSTEM_PROMPT, global_callbacks
+from core.dynamic_tools import load_all_tools
+from core.agent_graph import init_tools_llm as init_llm, global_callbacks
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
