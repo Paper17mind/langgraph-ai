@@ -8,12 +8,24 @@ def write_code_to_file(filename: str, content: str) -> str:
     Creates or overwrites a file with the provided code or text content.
     Returns a success message or an error if it fails (e.g. syntax errors).
 
-    PENTING: Jangan gunakan tool ini untuk menulis atau menimpa file schema.json.
-    Schema project harus dibuat menggunakan format yang benar dan TIDAK boleh ditimpa sembarangan.
-    Gunakan read_project_schema terlebih dahulu untuk membaca schema yang sudah ada.
+    ATURAN LOKASI FILE (STRICT):
+    - Temporary / scratch scripts: WAJIB disimpan di folder `scratch/` (misal: `scratch/generate_car.py`).
+    - Asset gambar / media: WAJIB disimpan di folder `data/images/` (misal: `data/images/mobil.png`).
+    - Skill / Tools baru: WAJIB disimpan di `skills/generated/`.
+    - Kode Proyek Aplikasi: WAJIB disimpan di `projects/<project_name>/`.
+    DILARANG MENULIS FILE TEMPORARY/SCRATCH DI ROOT FOLDER PROYEK!
     """
     try:
         abs_path = os.path.abspath(filename)
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # Block writing temporary standalone python scripts directly in root
+        rel_path = os.path.relpath(abs_path, root_dir)
+        if not rel_path.startswith("..") and "/" not in rel_path and "\\" not in rel_path:
+            if filename.endswith(".py") and filename not in ["main.py", "server.py"]:
+                filename = os.path.join("scratch", filename)
+                abs_path = os.path.abspath(filename)
+
         dir_name = os.path.dirname(abs_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)

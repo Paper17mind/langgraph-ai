@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 
 _EMBED_MODEL = None
 _STORE_DIR = "vector_stores"
+_PDF_LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "pdf_qa")
 
 def _get_model():
     global _EMBED_MODEL
@@ -23,7 +24,7 @@ def _get_store_paths(collection_name: str):
 
 @tool
 def process_pdf(file_path: str, collection_name: str) -> str:
-    """Process PDF file, chunk text, generate embeddings, and store in FAISS vector store."""
+    """Process PDF file, chunk text, generate embeddings, store in FAISS, and save text log to logs/pdf_qa/."""
     if not os.path.exists(file_path):
         return f"Error: File not found at {file_path}"
     
@@ -32,12 +33,15 @@ def process_pdf(file_path: str, collection_name: str) -> str:
     chunk_size = 500
     chunk_overlap = 50
     
+    pages_formatted = []
     pages_text = []
-    for page in reader.pages:
+    for idx, page in enumerate(reader.pages, start=1):
         text = page.extract_text()
         if text:
             pages_text.append(text)
-    full_text = chr(10).join(pages_text)
+            pages_formatted.append(f"--- [Halaman {idx}] ---\n{text}")
+            
+    full_text = "\n".join(pages_text)
             
     start = 0
     while start < len(full_text):
@@ -47,6 +51,18 @@ def process_pdf(file_path: str, collection_name: str) -> str:
         
     if not chunks:
         return "Error: No text extracted from PDF."
+
+    # Save plaintext log to logs/pdf_qa/<collection_name>.txt
+    os.makedirs(_PDF_LOGS_DIR, exist_ok=True)
+    safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in collection_name)
+    log_file_path = os.path.join(_PDF_LOGS_DIR, f"{safe_name}.txt")
+    rel_log_path = f"logs/pdf_qa/{safe_name}.txt"
+    
+    try:
+        with open(log_file_path, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(pages_formatted))
+    except Exception as e:
+        print(f"[pdf_qa] Warning saving log file: {e}")
         
     model = _get_model()
     embeddings = model.encode(chunks, convert_to_numpy=True)
@@ -60,7 +76,10 @@ def process_pdf(file_path: str, collection_name: str) -> str:
     with open(data_path, "wb") as f:
         pickle.dump(chunks, f)
         
-    return f"Successfully processed {file_path}. Created collection '{collection_name}' with {len(chunks)} chunks."
+    return (
+        f"Successfully processed {file_path}. Created collection '{collection_name}' with {len(chunks)} chunks.\n"
+        f"📄 Plaintext log tersimpan di: {rel_log_path} (Anda dapat mencari keyword di file ini menggunakan search_in_file atau read_specific_line)."
+    )
 
 @tool
 def query_pdf(collection_name: str, question: str) -> str:

@@ -48,17 +48,42 @@ def retrieve_memories(query: str, k: int = 3) -> str:
 # ── LLM Init ──────────────────────────────────────────────────────────────────
 
 def init_master_llm():
-    """Master LLM menggunakan Groq (openai/gpt-oss-120b)"""
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    if not groq_key:
-        raise ValueError("GROQ_API_KEY tidak dikonfigurasi di .env")
-    return ChatGroq(
-        api_key=groq_key,
-        model_name="openai/gpt-oss-120b",
+    """
+    Master LLM mencoba Groq (openai/gpt-oss-120b) sebagai primary.
+    Jika Groq error / token habis / rate limit, otomatis fallback ke 9Router (antigravity).
+    """
+    ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY", default="")
+    ninerouter_url = _get_env_first(
+        "NINEROUTER_URL", "9ROUTER_URL", default="http://localhost:20128/v1/chat/completions"
+    )
+    base_url = ninerouter_url.replace("/chat/completions", "")
+    ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="antigravity")
+
+    fallback_llm = ChatOpenAI(
+        api_key=ninerouter_key,
+        base_url=base_url,
+        model=ninerouter_model,
         temperature=0.4,
         timeout=300,
         max_retries=1,
     )
+
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        return fallback_llm
+
+    try:
+        primary_llm = ChatGroq(
+            api_key=groq_key,
+            model_name="openai/gpt-oss-120b",
+            temperature=0.4,
+            timeout=300,
+            max_retries=1,
+        )
+        return primary_llm.with_fallbacks([fallback_llm])
+    except Exception as e:
+        print(f"[Master LLM] Primary Groq init error, using fallback 9Router: {e}")
+        return fallback_llm
 
 def init_reviewer_llm():
     """Reviewer LLM menggunakan 9Router (antigravity) untuk menghemat quota token Groq"""
@@ -338,22 +363,26 @@ Jalankan tools yang sesuai dan berikan kesimpulan akhir tindakan Anda.""")
     result = react_agent.invoke({"messages": worker_messages})
     final_output = result["messages"][-1].content
     
-    # Kumpulkan riwayat pemanggilan tool untuk diaudit oleh reviewer
+    # Kumpulkan riwayat pemanggilan tool & hasilnya untuk diaudit oleh reviewer
     tools_called = []
     for msg in result["messages"][len(worker_messages):]:
         if getattr(msg, "tool_calls", None):
             for tc in msg.tool_calls:
-                tools_called.append(f"- {tc['name']}: {tc['args']}")
+                tools_called.append(f"- Tool Called: {tc['name']}({tc['args']})")
+        if getattr(msg, "name", None) or getattr(msg, "content", None):
+            if msg.type == "tool":
+                tool_output = str(msg.content)[:1000]
+                tools_called.append(f"  Output [{getattr(msg, 'name', 'tool')}]: {tool_output}")
                 
     audit_trail = "\n".join(tools_called) if tools_called else "TIDAK ADA TOOL YANG DIPANGGIL."
     
-    return {"messages": [AIMessage(content=f"[Riwayat Tools]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")]}
+    return {"messages": [AIMessage(content=f"[Riwayat Tools & Output]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")]}
 
 def reviewer_node(state: AgentState):
     """
-    Mengevaluasi hasil dari tool_worker_node menggunakan Groq llama-3.1-8b-instant.
+    Mengevaluasi hasil dari tool_worker_node sebagai Quality Control (QC) Agent.
     """
-    print("\n🔍 [Reviewer Node] Mengevaluasi Pekerjaan Worker...")
+    print("\n🔍 [Reviewer Node] Mengevaluasi Pekerjaan Worker (QC Check)...")
     llm = init_reviewer_llm()
     
     retry_count = state.get("retry_count", 0)
@@ -367,7 +396,7 @@ def reviewer_node(state: AgentState):
     
     prompt = f"""
 Tugas Anda adalah mengevaluasi hasil kerja (Tool Worker) berdasarkan permintaan pengguna.
-Anda harus bersikap SANGAT TEGAS. Pastikan Worker benar-benar memanggil tool yang diperlukan, bukan sekadar berhalusinasi atau memberikan jawaban teoritis tanpa bertindak.
+Anda adalah Quality Control (QC) Agent yang SANGAT TEGAS, TELITI, dan TANPA KOMPROMI.
 
 Permintaan Pengguna: {user_query}
 Instruksi/Rencana: {intent_plan}
@@ -375,13 +404,18 @@ Instruksi/Rencana: {intent_plan}
 Laporan Eksekusi Worker: 
 {worker_result}
 
-EVALUASI KRITIS:
-1. Apakah instruksi mensyaratkan Worker untuk melakukan tindakan fisik (menyimpan file, membaca file, mencari web, dll)?
-2. Jika YA, periksa [Riwayat Tools] di atas. Apakah tertulis "TIDAK ADA TOOL YANG DIPANGGIL."? Jika ya, berarti Worker GAGAL/BERHALUSINASI, dan Anda wajib melakukan REJECT!
-3. Jika Worker hanya berkata "Saya telah menyimpannya" tapi di [Riwayat Tools] kosong, itu adalah halusinasi. Tolak!
+EVALUASI KRITIS (QUALITY CONTROL):
+1. KEGAGALAN SINTAKS / ERROR KODE (CRITICAL):
+   - Periksa seluruh [Riwayat Tools & Output] dan [Hasil dari Tool Worker] di atas.
+   - Jika terdapat pesan "Syntax Error", "SyntaxError", "unterminated string literal", "Traceback", "Error:", "BLOCKED:", atau kesalahan sintaksis Python, maka pekerjaan Worker GAGAL!
+   - Anda WAJIB menolak dengan "STATUS: REJECTED" dan tuliskan pesan error sintaks tersebut secara jelas agar Worker memperbaiki kodenya sampai benar-benar valid tanpa error!
 
-Jika BERHASIL/BENAR (tools dipanggil dengan benar atau permintaan tidak butuh tool spesifik), balas HANYA dengan: "STATUS: APPROVED"
-Jika GAGAL/HALUSINASI, balas dengan: "STATUS: REJECTED" dan di baris berikutnya tuliskan instruksi/marahan spesifik apa yang harus diperbaiki oleh Worker (misal: "Anda tidak menggunakan tool apapun! Gunakan tool write_file untuk menyimpan script tersebut!").
+2. TOOL CALLING / BEBAS HALUSINASI:
+   - Apakah instruksi mensyaratkan Worker melakukan tindakan (misal: simpan file, baca file, jalankan perintah)?
+   - Jika YA dan di [Riwayat Tools & Output] tertulis "TIDAK ADA TOOL YANG DIPANGGIL.", atau Worker hanya mengklaim sudah membuat/menyimpan file tetapi tidak memanggil tool, maka Anda WAJIB REJECT!
+
+Jika KODE BEBAS SYNTAX ERROR & TOOL DIPANGGIL DENGAN BENAR, balas HANYA dengan: "STATUS: APPROVED"
+Jika TERDAPAT ERROR SINTAKS ATAU HALUSINASI, balas dengan: "STATUS: REJECTED" dan di baris berikutnya tuliskan instruksi/koreksi spesifik yang harus diperbaiki oleh Worker.
 """
     response = llm.invoke([HumanMessage(content=prompt)])
     content = response.content.strip()

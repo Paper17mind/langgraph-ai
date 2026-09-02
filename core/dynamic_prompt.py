@@ -17,6 +17,13 @@ If memory becomes outdated (e.g. project deleted), use 'forget_fact' to remove i
 If you face a coding problem or need context, use the 'recall_facts' tool to search your past solutions.
 If a tool returns an error, read it carefully and try again to fix the problem.
 
+DIRECTORY & FILE LOCATION RULES (STRICTLY ENFORCED):
+- Temporary / Scratch Scripts: Save ONLY in `scratch/` folder (e.g. `scratch/script.py`). NEVER in root directory.
+- Generated Images / Media / Assets: Save ONLY in `data/images/` or `storage/images/` folder (e.g. `data/images/gambar.png`). Make sure the directory exists or script creates it (`os.makedirs("data/images", exist_ok=True)`).
+- New Skills / Tools: Save ONLY in `skills/generated/`.
+- App Projects: Save ONLY in `projects/<project_name>/`.
+- DILARANG HARAM: Menulis file script temporary atau asset gambar secara sembarangan di root folder proyek!
+
 EFFICIENCY RULES (STRICTLY ENFORCED):
 - For casual messages (greetings, questions, casual chat): respond DIRECTLY with NO tool calls. Just talk.
 - Only call tools when the user explicitly asks you to DO something (read/write file, generate code, search, etc.).
