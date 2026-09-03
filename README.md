@@ -14,8 +14,9 @@ Proyek ini adalah asisten AI otonom berbasis **LangGraph** yang dirancang untuk 
    - Dilengkapi dengan *web server* pendamping. AI bisa di- *trigger* oleh aplikasi eksternal (seperti GitHub, Trello, dsb) untuk secara proaktif mengirimkan laporan analisis ke Telegram Anda tanpa Anda memintanya terlebih dahulu.
 4. **Dynamic Tool Loader (Self-Extending AI)**
    - Anda dapat menyuruh AI untuk menciptakan *skill* (kode Python) baru. Kode tersebut akan disimpan, dan pada *restart* berikutnya, AI akan secara otomatis mengenali dan dapat menggunakan kemampuannya yang baru dibuat berkat mekanisme pemindaian otomatis di folder `/skills/`.
-5. **Robust Tooling**
-   - Mendukung manipulasi file sistem (`coder_skill`), eksekusi perintah terminal (`system_skill`), pencarian web (`web_search_skill`), pengambilan konten internet (`http_skill`), manajemen Trello (`trello_skill`), dan penjadwalan.
+5. **Robust Tooling & OSINT Intelligence**
+   - Mendukung manipulasi file sistem (`coder_skill`), eksekusi perintah terminal (`system_skill`), pencarian web (`web_search_skill`), pengambilan konten internet (`http_skill`), manajemen Trello (`trello_skill`), intelijen OSINT (`osint_skill`), dan penjadwalan.
+
 
 ---
 
