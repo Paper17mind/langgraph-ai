@@ -355,9 +355,19 @@ Opsi Respon:
 
 Permintaan User Terbaru: {user_query}
 """
-    response = llm.invoke([HumanMessage(content=prompt)])
+    # Retry up to 2 times if LLM returns empty
+    for attempt in range(3):
+        try:
+            response = llm.invoke([HumanMessage(content=prompt)])
+            content = (response.content or "").strip()
+            if content:
+                return {"intent": content}
+            print(f"⚠️ [Master] LLM returned empty response (attempt {attempt+1}/3), retrying...")
+        except Exception as ex:
+            print(f"⚠️ [Master] LLM Error (attempt {attempt+1}/3): {ex}")
     
-    return {"intent": response.content}
+    # All retries failed — return a safe fallback
+    return {"intent": "Maaf, saya tidak dapat memproses permintaan Anda saat ini. Silakan coba lagi."}
 
 def router(state: AgentState):
     intent_val = state.get("intent", "").strip()
@@ -512,45 +522,64 @@ Jalankan tools yang sesuai dan berikan kesimpulan akhir tindakan Anda.""")
 def reviewer_node(state: AgentState):
     """
     Mengevaluasi hasil dari tool_worker_node sebagai Quality Control (QC) Agent.
+    Didesain sangat efisien token (0-token fast pass + Head-Tail sampling).
     """
     print("\n🔍 [Reviewer Node] Mengevaluasi Pekerjaan Worker (QC Check)...")
-    llm = init_reviewer_llm()
-    
     retry_count = state.get("retry_count", 0)
     if retry_count >= 3:
         print("⚠️ [Reviewer] Batas maksimum retry tercapai. Lanjut ke summarizer.")
         return {"review_status": "APPROVED", "retry_count": retry_count}
         
-    worker_result = str(state["messages"][-1].content).replace('"', "'")
-    user_query = state.get("user_query")
-    intent_plan = state.get("intent", "")
+    raw_result = str(state["messages"][-1].content)
+    worker_result = raw_result.replace('"', "'")
     
-    prompt = f"""
-Tugas Anda adalah mengevaluasi hasil kerja (Tool Worker) berdasarkan permintaan pengguna.
-Anda adalah Quality Control (QC) Agent yang SANGAT TEGAS, TELITI, dan TANPA KOMPROMI.
+    # 1. FAST-PASS RULE CHECK (0 Tokens): Auto-Approve jika sukses tanpa error
+    error_keywords = ["syntaxerror", "traceback", "error:", "blocked:", "exception", "failed", "gagal"]
+    has_error = any(err in worker_result.lower() for err in error_keywords)
+    is_success = ("✅" in worker_result) or ("sudah disimpan ke:" in worker_result.lower()) or ("hasil:" in worker_result.lower())
+    
+    if is_success and not has_error:
+        print("⚡ [Reviewer Fast-Pass] Eksekusi sukses terdeteksi (0 Tokens dipakai).")
+        return {"review_status": "APPROVED", "retry_count": retry_count}
 
-Permintaan Pengguna: {user_query}
-Instruksi/Rencana: {intent_plan}
+    # 1b. FAST-REJECT: Error jelas tanpa success markers (0 Tokens)
+    if has_error and not is_success:
+        # Extract a short error snippet for feedback
+        error_snippet = worker_result[:500]
+        print(f"⚡ [Reviewer Fast-Reject] Error terdeteksi tanpa indikator sukses (0 Tokens dipakai).")
+        return {
+            "review_status": "REJECTED",
+            "retry_count": retry_count + 1,
+            "messages": [HumanMessage(content=f"[Koreksi dari Reviewer]:\nEksekusi gagal. Error yang terdeteksi:\n{error_snippet}\n\nPerbaiki parameter atau pendekatan dan coba lagi.")]
+        }
 
-Laporan Eksekusi Worker: 
-{worker_result}
+    # 2. HEAD-TAIL SAMPLING: Potong ringkas untuk menghemat token LLM
+    if len(worker_result) > 1000:
+        compact_result = f"{worker_result[:500]}\n... [Dipotong {len(worker_result)} Karakter] ...\n{worker_result[-500:]}"
+    else:
+        compact_result = worker_result
 
-EVALUASI KRITIS (QUALITY CONTROL):
-1. KEGAGALAN SINTAKS / ERROR KODE (CRITICAL):
-   - Periksa seluruh [Riwayat Tools & Output] dan [Hasil dari Tool Worker] di atas.
-   - Jika terdapat pesan "Syntax Error", "SyntaxError", "unterminated string literal", "Traceback", "Error:", "BLOCKED:", atau kesalahan sintaksis Python, maka pekerjaan Worker GAGAL!
-   - Anda WAJIB menolak dengan "STATUS: REJECTED" dan tuliskan pesan error sintaks tersebut secara jelas agar Worker memperbaiki kodenya sampai benar-benar valid tanpa error!
+    user_query = str(state.get("user_query", ""))[:300]
+    intent_plan = str(state.get("intent", ""))[:300]
+    
+    prompt = f"""Tugas: Evaluasi QC Pekerjaan Worker.
+Permintaan User: {user_query}
+Rencana Intent: {intent_plan}
 
-2. TOOL CALLING / BEBAS HALUSINASI:
-   - Apakah instruksi mensyaratkan Worker melakukan tindakan (misal: simpan file, baca file, jalankan perintah)?
-   - Jika YA dan di [Riwayat Tools & Output] tertulis "TIDAK ADA TOOL YANG DIPANGGIL.", atau Worker hanya mengklaim sudah membuat/menyimpan file tetapi tidak memanggil tool, maka Anda WAJIB REJECT!
+Laporan Eksekusi Worker:
+{compact_result}
 
-Jika KODE BEBAS SYNTAX ERROR & TOOL DIPANGGIL DENGAN BENAR, balas HANYA dengan: "STATUS: APPROVED"
-Jika TERDAPAT ERROR SINTAKS ATAU HALUSINASI, balas dengan: "STATUS: REJECTED" dan di baris berikutnya tuliskan instruksi/koreksi spesifik yang mejelaskan perbaikan.
+EVALUASI:
+1. Jika ada SyntaxError, Traceback, Error, atau Halusinasi -> Balas "STATUS: REJECTED" + instruksi koreksi.
+2. Jika hasil valid dan bebas error -> Balas "STATUS: APPROVED".
 """
+    llm = init_reviewer_llm()
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-        content = response.content.strip()
+        content = (response.content or "").strip()
+        if not content:
+            print("⚠️ [Reviewer] LLM returned empty response. Auto-approving...")
+            return {"review_status": "APPROVED", "retry_count": retry_count}
     except Exception as ex:
         print(f"⚠️ [Reviewer] QC LLM Error: {ex}. Auto-approving...")
         return {"review_status": "APPROVED", "retry_count": retry_count}
@@ -576,6 +605,7 @@ def reviewer_router(state: AgentState):
 def summarizer_node(state: AgentState):
     """
     Master LLM memberikan format hasil akhir yang natural kepada user.
+    Dilengkapi dengan auto-read log file untuk output yang terpotong oleh dynamic_tools.
     """
     intent_val = state.get("intent", "")
     
@@ -595,18 +625,62 @@ def summarizer_node(state: AgentState):
                 
     worker_result = state["messages"][-1].content
     
+    # --- Auto-read truncated output from log file & Smart Sampling ---
+    MAX_SUMMARIZER_CHARS = 15000
+    if "[Output terlalu panjang:" in worker_result and "Sudah disimpan ke:" in worker_result:
+        import re
+        log_match = re.search(r"Sudah disimpan ke:\s*(logs/\S+)", worker_result)
+        if log_match:
+            log_path = log_match.group(1)
+            try:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    full_content = f.read()
+                print(f"📖 [Summarizer] Membaca konten lengkap dari {log_path} ({len(full_content):,} chars)")
+                
+                # Head-Middle-Tail sampling for long transcripts to cover full narrative
+                if len(full_content) > MAX_SUMMARIZER_CHARS:
+                    total_len = len(full_content)
+                    head = full_content[:6000]
+                    mid_start = (total_len // 2) - 2500
+                    mid = full_content[mid_start : mid_start + 5000]
+                    tail = full_content[-4000:]
+                    worker_result = f"{head}\n\n... [Bagian Tengah Transkrip] ...\n{mid}\n\n... [Bagian Akhir Transkrip] ...\n{tail}"
+                else:
+                    worker_result = full_content
+            except Exception as ex:
+                print(f"⚠️ [Summarizer] Gagal baca log file: {ex}")
+    elif len(worker_result) > MAX_SUMMARIZER_CHARS:
+        total_len = len(worker_result)
+        head = worker_result[:6000]
+        mid_start = (total_len // 2) - 2500
+        mid = worker_result[mid_start : mid_start + 5000]
+        tail = worker_result[-4000:]
+        worker_result = f"{head}\n\n... [Bagian Tengah] ...\n{mid}\n\n... [Bagian Akhir] ...\n{tail}"
+    
     prompt = f"""
-Anda adalah Asisten AI Utama (Master).
-Berikut adalah ringkasan tindakan yang baru saja diselesaikan oleh sub-agen pekerja (Tool Worker) Anda untuk menjawab pertanyaan pengguna.
+Anda adalah Asisten AI Cerdas, Komunikatif, dan Berwawasan Luas.
+Tugas Anda adalah merangkum atau menyampaikan hasil eksekusi tugas kepada pengguna dengan gaya bahasa Indonesia yang natural, mengalir, menarik, dan mudah dipahami.
 
-Pertanyaan Pengguna: "{user_query}"
-Laporan Pekerja: 
+Pertanyaan / Permintaan Pengguna: "{user_query}"
+Konten / Hasil Pekerjaan: 
 {worker_result}
 
-Tugas Anda:
-Sampaikan hasil ini kepada pengguna dengan bahasa yang natural, ramah, dan ringkas. JANGAN menyebutkan hal-hal teknis mengenai "pekerja" atau "sub-agen", anggap Anda sendiri yang telah menyelesaikannya.
+PETUNJUK FORMAT PENULISAN:
+1. Gunakan bahasa Indonesia yang sopan, ramah, dan enak dibaca (hindari kalimat kaku atau singkatan terpotong-potong).
+2. Jika materi berupa transkrip/video/artikel panjang, susun dengan struktur Markdown yang rapi:
+   - 📌 **Ringkasan Singkat / Gambaran Umum**: 2-3 kalimat yang menjelaskan konteks utama.
+   - 💡 **Poin-Poin Kunci & Pembahasan Utama**: Pembagian per bagian/tema penting dengan bullet points dan penjelasan ringkas tapi padat.
+   - 🎯 **Kesimpulan & Insight Penting**: Pesan utama atau penutup yang informatif.
+3. JANGAN PERNAH menyuruh user menonton sendiri atau mengatakan "teks terlalu panjang". Tugas Anda adalah menyajikan informasi terbaik dari data yang ada.
+4. JANGAN gunakan istilah teknis internal seperti "sub-agen", "worker", "log file", "pipeline". Anggap Anda sendiri yang telah menganalisis dan menyusunnya.
 """
-    response = llm.invoke([HumanMessage(content=prompt)])
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        if not response.content or not response.content.strip():
+            return {"messages": [AIMessage(content=f"Maaf, terjadi kendala saat memproses ringkasan.")]}
+    except Exception as ex:
+        print(f"⚠️ [Summarizer] LLM Error: {ex}")
+        return {"messages": [AIMessage(content=f"Terjadi error saat merangkum. Silakan coba lagi.")]}
     
     return {"messages": [response]}
 
