@@ -33,7 +33,7 @@ EFFICIENCY RULES (STRICTLY ENFORCED):
 - If unsure whether to use a tool: DON'T. Just answer and ask the user.
 
 Do not stop until you have either succeeded or fundamentally cannot proceed.
-PENTING: Gunakan bahasa Indonesia yang SANGAT SANTAI, ramah, dan luwes layaknya sedang ngobrol dengan teman (contoh: pakai kata 'aku', 'kamu', 'nih'). JANGAN PERNAH memberikan jawaban berupa poin-poin kaku tanpa basa-basi. HARAM HUKUMNYA membalas dengan kalimat pendek-pendek seperti robot (contoh buruk: "Pilih satu. Buat. Selesai."). Bumbui setiap responmu dengan interaksi manusiawi dan asyik!"""
+PENTING: Gunakan bahasa Indonesia yang ramah, dan luwes layaknya sedang ngobrol dengan teman (contoh: pakai kata 'aku', 'kamu'). JANGAN PERNAH memberikan jawaban berupa poin-poin kaku tanpa basa-basi. HARAM HUKUMNYA membalas dengan kalimat pendek-pendek seperti robot (contoh buruk: "Pilih satu. Buat. Selesai.")."""
 
 OPTIONAL_PROMPT_BLOCKS = {
     "skill_authoring": {
@@ -42,8 +42,8 @@ OPTIONAL_PROMPT_BLOCKS = {
         },
         "full": """[SKILL AUTHORING RULES]
 If you need a capability you don't have, you may write a new Python skill. RULES:
-1. Save ALL new skill files ONLY inside `skills/generated/`. NEVER create Python files in the project root.
-2. MANDATORY: Every function exposed as a tool MUST use the `@tool` decorator from `langchain_core.tools`. Without `@tool` it will never be discovered. Minimal template:
+1. Save ALL new skill files ONLY inside `skills/generated/` and ALWAYS name the file ending with `_skill.py` (e.g. `skills/generated/image_generator_skill.py`). NEVER omit `_skill.py` and NEVER create Python files in the project root directory.
+2. MANDATORY: Every function exposed as a tool MUST use the `@tool` decorator from `langchain_core.tools`. Without `@tool` it will NEVER be imported or discovered. Minimal template:
 ```python
 from langchain_core.tools import tool
 
@@ -56,8 +56,8 @@ def my_tool(param1: str, param2: int = 10) -> str:
 3. Build DYNAMIC, reusable tools with parameters — never hardcode a single task (e.g. `search_files(query, limit)` not `check_email_today()`).
 4. Temporary/scratch scripts go in `scratch/` (create it if missing). NEVER put temp files in the root.
 5. ANTI-DUPLICATION: Before creating a new project folder, check `projects/` for an existing one. Save new projects to long-term memory via `remember_fact`.
-6. Skills saved to `skills/generated/` are auto-reloaded on the next tool call — no special activation needed. If loading fails with 'Skipping... No @tool-decorated function found', add the missing `@tool` decorator.""",
-        "short": "[Skills] New tool → save ONLY in `skills/generated/`, MUST use @tool decorator, make it dynamic/reusable, scratch files → `scratch/`, check `projects/` before creating a new folder.",
+6. Skills saved to `skills/generated/<name>_skill.py` with `@tool` are auto-reloaded on the next tool call — no special activation needed.""",
+        "short": "[Skills] New tool → save ONLY in `skills/generated/` ending with `_skill.py`, MUST use @tool decorator, make it dynamic/reusable, scratch files → `scratch/`, check `projects/` before creating a new folder.",
     },
     "fsd_workflow": {
         "keywords": { "fsd", "prd", "planning", "fitur", "project", "proyek" },

@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import time
 import operator
 from typing import TypedDict, List, Annotated, Any
@@ -86,7 +87,7 @@ def init_master_llm():
         return fallback_llm
 
 def init_reviewer_llm():
-    """Reviewer LLM menggunakan 9Router (antigravity) untuk menghemat quota token Groq"""
+    """Reviewer LLM mencoba 9Router (antigravity), jika error fallback ke Groq"""
     ninerouter_key = _get_env_first("NINEROUTER_API_KEY", "9ROUTER_API_KEY", default="")
     ninerouter_url = _get_env_first(
         "NINEROUTER_URL", "9ROUTER_URL", default="http://localhost:20128/v1/chat/completions"
@@ -94,7 +95,7 @@ def init_reviewer_llm():
     base_url = ninerouter_url.replace("/chat/completions", "")
     ninerouter_model = _get_env_first("NINEROUTER_MODEL", "9ROUTER_MODEL", default="antigravity")
 
-    return ChatOpenAI(
+    primary_llm = ChatOpenAI(
         api_key=ninerouter_key,
         base_url=base_url,
         model=ninerouter_model,
@@ -102,6 +103,21 @@ def init_reviewer_llm():
         timeout=300,
         max_retries=1,
     )
+
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if groq_key:
+        try:
+            fallback_llm = ChatGroq(
+                api_key=groq_key,
+                model_name="openai/gpt-oss-120b",
+                temperature=0.1,
+                timeout=300,
+                max_retries=1,
+            )
+            return primary_llm.with_fallbacks([fallback_llm])
+        except Exception:
+            pass
+    return primary_llm
 
 def init_tools_llm():
     """Tools LLM menggunakan 9Router (dari .env)"""
@@ -294,19 +310,48 @@ def master_intent_node(state: AgentState):
                 content = content[:1000] + "... [dipotong]"
             chat_history += f"[{role}]: {content}\n"
             
+    all_tools = load_all_tools()
+    tools_summary = ", ".join([t.name for t in all_tools])
+
     prompt = f"""
 {system}
 
 {chat_history}
 
+DAFTAR TOOLS TERSEDIA DI SISTEM:
+[{tools_summary}]
+
 Tugas Utama Anda: 
-Analisis permintaan pengguna terbaru berikut berdasarkan konteks riwayat percakapan.
-Jika permintaan tersebut memerlukan tindakan eksternal / penggunaan tools (misalnya: membaca file yang disebutkan sebelumnya, menjalankan script, eksekusi shell command, melakukan operasi pada sistem, dsb), balas HANYA dengan format:
-"USE_TOOLS: <rencana singkat apa yang harus dilakukan>"
+Analisis permintaan pengguna terbaru berikut berdasarkan konteks riwayat percakapan, memori, dan daftar tools di atas.
 
-PENTING: Jika pengguna merujuk pada sesuatu yang dikerjakan sebelumnya ("file yang tadi", "script yang baru dibuat", dll), Anda WAJIB menggunakan tool untuk membaca/mengecek file tersebut jika Anda belum tahu isinya!
+ATURAN PENTING:
+1. ATURAN MEMORI (STRICT): jika pengguna memberikan perintah untuk mengingat ("ingat", "catat", "simpan di memori", "jangan lupa") ATAU memberikan aturan/preferensi baru (misal: "kalau suruh buat gambar gunakan tool X"), Anda WAJIB memanggil `remember_fact` menggunakan USE_TOOLS_BATCH:
+   USE_TOOLS_BATCH:
+   [
+     {{"tool": "remember_fact", "args": {{"fact": "<fakta/aturan lengkap dari user>"}}}}
+   ]
+   DILARANG HARAM HANYA MENJAWAB "Iya siap aku catat" TANPA MEMANGGIL TOOL `remember_fact`!
 
-Jika permintaan hanya percakapan biasa atau Anda bisa langsung menjawabnya dari memori/riwayat di atas tanpa alat bantuan apa pun, berikan jawaban langsung kepada pengguna (jangan menggunakan format USE_TOOLS).
+2. EKSEKUSI TUGAS & SYSTEM DATA: Jika pengguna meminta tindakan, analisis data, eksekusi script/command, atau informasi sistem (seperti cek token, baca file, dsb), Anda WAJIB memilih Opsi 1 (USE_TOOLS_BATCH) atau Opsi 2 (USE_TOOLS). DILARANG MENJAWAB "Saya tidak memiliki akses" jika tindakan tersebut bisa dilakukan dengan tools di atas!
+3. Jika intent User larangan atau pengingat, Anda WAJIB panggil tool remember_fact !
+4. KETEPATAN PARAMETER TOOL (STRICT): Anda WAJIB memeriksa DAFTAR TOOLS TERSEDIA di atas dan menggunakan nama parameter argument yang PRESISI/PERSIS sesuai definisi tool (misal: untuk `generate_image_tool` gunakan nama argument `filename`, BUKAN `output_path`).
+
+Opsi Respon:
+1. BATCH PIPELINE MODE (EKSEKUSI CEPAT TERSTRUKTUR - UTAMAKAN INI):
+   Jika permintaan memerlukan 1 atau beberapa langkah tool yang jelas/sekuensial (misal: simpan memori, jalankan command python, baca file, dsb), balas DENGAN FORMAT BATCH TOOL PIPELINE JSON:
+   USE_TOOLS_BATCH:
+   [
+     {{"tool": "nama_tool_1", "args": {{"param1": "val1"}}}},
+     {{"tool": "nama_tool_2", "args": {{"param2": "$PREV_RESULT"}}}}
+   ]
+   (Gunakan placeholder "$PREV_RESULT" di args jika membutuhkan output dari tool sebelumnya).
+
+2. REACT WORKER MODE (UNTUK EKSPLORASI INTERAKTIF):
+   Jika urutan langkah belum pasti dan memerlukan analisis/trial-and-error interaktif, balas:
+   "USE_TOOLS: <rencana singkat apa yang harus dilakukan>"
+
+3. DIRECT CHAT MODE (HANYA UNTUK PERCAKAPAN BIASA):
+   HANYA untuk obrolan santai/sapaan ("halo", "apa kabar") atau pertanyaan umum tanpa perintah mengingat/tindakan sistem.
 
 Permintaan User Terbaru: {user_query}
 """
@@ -315,10 +360,84 @@ Permintaan User Terbaru: {user_query}
     return {"intent": response.content}
 
 def router(state: AgentState):
-    intent_val = state.get("intent", "")
-    if "USE_TOOLS" in intent_val:
+    intent_val = state.get("intent", "").strip()
+    if "USE_TOOLS_BATCH:" in intent_val or (intent_val.startswith("[") and '"tool"' in intent_val):
+        return "batch_worker"
+    elif "USE_TOOLS" in intent_val:
         return "tool_worker"
     return "summarizer"
+
+def batch_worker_node(state: AgentState):
+    """
+    Mengeksekusi sekelompok tool call dari JSON pipeline secara berurutan
+    langsung di Python tanpa perlu memanggil LLM berulang kali.
+    """
+    print("\n⚡ [Batch Worker Node] Mengeksekusi Tool Pipeline secara Lokal...")
+    intent_val = state.get("intent", "").strip()
+    json_str = intent_val.replace("USE_TOOLS_BATCH:", "").strip()
+    
+    if json_str.startswith("```"):
+        json_str = re.sub(r"^```[a-zA-Z]*\n?", "", json_str)
+        json_str = re.sub(r"\n?```$", "", json_str).strip()
+
+    pipeline = []
+    try:
+        pipeline = json.loads(json_str)
+    except Exception as e:
+        print(f"⚠️ [Batch Worker] Gagal parse JSON pipeline: {e}. Mengalihkan ke standard tool worker...")
+        state["intent"] = "USE_TOOLS: " + json_str
+        return tool_worker_node(state)
+
+    if not isinstance(pipeline, list):
+        pipeline = [pipeline]
+
+    tool_map = {t.name: t for t in load_all_tools()}
+    tools_called = []
+    prev_output = ""
+
+    for i, step in enumerate(pipeline, start=1):
+        if not isinstance(step, dict):
+            continue
+        tool_name = step.get("tool")
+        tool_args = step.get("args", {})
+
+        if not tool_name or tool_name not in tool_map:
+            tools_called.append(f"- Step {i}: ❌ Tool '{tool_name}' tidak ditemukan.")
+            continue
+
+        # Replace $PREV_RESULT placeholder jika ada
+        for k, v in list(tool_args.items()):
+            if isinstance(v, str) and "$PREV_RESULT" in v:
+                tool_args[k] = v.replace("$PREV_RESULT", prev_output)
+
+        tools_called.append(f"- Tool Called: {tool_name}({tool_args})")
+        log_internal_step("tool_start", {"tool_name": tool_name, "args": tool_args})
+        console.print(f"\n[bold yellow]⚡ [Batch Tool {i}/{len(pipeline)}]:[/] {tool_name} {tool_args}")
+
+        try:
+            tool_obj = tool_map[tool_name]
+            output = tool_obj.invoke(tool_args)
+            prev_output = str(output)
+            tools_called.append(f"  Output [{tool_name}]: {prev_output[:1000]}")
+            console.print(Panel(prev_output[:1000], title=f"✅ Result: {tool_name}", border_style="orange3"))
+            log_internal_step("tool_end", {"output": prev_output[:1000]})
+        except Exception as ex:
+            err_msg = f"Error executing {tool_name}: {ex}"
+            tools_called.append(f"  Output [{tool_name}]: {err_msg}")
+            prev_output = err_msg
+            console.print(Panel(err_msg, title=f"❌ Error: {tool_name}", border_style="red"))
+            # Auto-save error into memory
+            try:
+                from utils.memory_db import memory_db
+                memory_db.save_fact(f"BUG LOG [{tool_name}]: {err_msg[:250]}")
+                print(f"📌 [Auto Memory] Recorded bug log for {tool_name}")
+            except Exception:
+                pass
+
+    audit_trail = "\n".join(tools_called) if tools_called else "TIDAK ADA TOOL YANG DIPANGGIL."
+    final_output = f"Batch Tool Pipeline selesai mengeksekusi {len(pipeline)} langkah.\n\nHasil Akhir:\n{prev_output}"
+    
+    return {"messages": [AIMessage(content=f"[Riwayat Tools & Output]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")]}
 
 def tool_worker_node(state: AgentState):
     """
@@ -334,8 +453,9 @@ def tool_worker_node(state: AgentState):
             if isinstance(msg, HumanMessage):
                 user_query = msg.content
                 break
-                
+    
     current_tools = load_all_tools()
+    # current_tools = select_relevant_tools(load_all_tools(), user_query)
     intent_plan = state.get("intent", "").replace("USE_TOOLS:", "").strip()
     
     react_agent = create_react_agent(
@@ -349,8 +469,9 @@ Rencana / Instruksi dari Master: {intent_plan}
 
 PENTING UNTUK DIPERHATIKAN:
 - JANGAN pernah menuliskan blok JSON secara manual di dalam teks respons Anda (seperti `{{ "name": "write_code_to_file", ... }}`).
-- Anda WAJIB memanggil tools menggunakan mekanisme 'Function Calling' / 'Tool Calling' bawaan (native tool calls).
+- Anda WAJIB memanggil tools menggunakan mekanisme 'Function Calling' / 'Tool Calling' bawaan (native tool calls), pastikan argument pemanggilan tools sesuai.
 - Jika Anda tidak memanggil tools secara native, tindakan Anda tidak akan tereksekusi!
+- ATURAN ERROR: Jika pemanggilan tool menghasilkan error/SyntaxError/gagal, PANGGIL tool `remember_fact` untuk mencatat bug tersebut ke memori serta alasan nya lalu perbaiki kodenya.
 
 Jalankan tools yang sesuai dan berikan kesimpulan akhir tindakan Anda.""")
     )
@@ -374,6 +495,16 @@ Jalankan tools yang sesuai dan berikan kesimpulan akhir tindakan Anda.""")
                 tool_output = str(msg.content)[:1000]
                 tools_called.append(f"  Output [{getattr(msg, 'name', 'tool')}]: {tool_output}")
                 
+                # Auto-save error into ChromaDB long-term memory
+                if any(err_kw in tool_output.lower() for err_kw in ["syntaxerror", "syntax error", "traceback", "error:", "failed"]):
+                    try:
+                        from utils.memory_db import memory_db
+                        t_name = getattr(msg, "name", "tool")
+                        memory_db.save_fact(f"BUG LOG [{t_name}]: {tool_output[:250]}")
+                        print(f"📌 [Auto Memory] Recorded tool error for {t_name} into ChromaDB")
+                    except Exception as ex:
+                        print(f"[Auto Memory Error] {ex}")
+                
     audit_trail = "\n".join(tools_called) if tools_called else "TIDAK ADA TOOL YANG DIPANGGIL."
     
     return {"messages": [AIMessage(content=f"[Riwayat Tools & Output]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")]}
@@ -390,7 +521,7 @@ def reviewer_node(state: AgentState):
         print("⚠️ [Reviewer] Batas maksimum retry tercapai. Lanjut ke summarizer.")
         return {"review_status": "APPROVED", "retry_count": retry_count}
         
-    worker_result = state["messages"][-1].content
+    worker_result = str(state["messages"][-1].content).replace('"', "'")
     user_query = state.get("user_query")
     intent_plan = state.get("intent", "")
     
@@ -415,10 +546,14 @@ EVALUASI KRITIS (QUALITY CONTROL):
    - Jika YA dan di [Riwayat Tools & Output] tertulis "TIDAK ADA TOOL YANG DIPANGGIL.", atau Worker hanya mengklaim sudah membuat/menyimpan file tetapi tidak memanggil tool, maka Anda WAJIB REJECT!
 
 Jika KODE BEBAS SYNTAX ERROR & TOOL DIPANGGIL DENGAN BENAR, balas HANYA dengan: "STATUS: APPROVED"
-Jika TERDAPAT ERROR SINTAKS ATAU HALUSINASI, balas dengan: "STATUS: REJECTED" dan di baris berikutnya tuliskan instruksi/koreksi spesifik yang harus diperbaiki oleh Worker.
+Jika TERDAPAT ERROR SINTAKS ATAU HALUSINASI, balas dengan: "STATUS: REJECTED" dan di baris berikutnya tuliskan instruksi/koreksi spesifik yang mejelaskan perbaikan.
 """
-    response = llm.invoke([HumanMessage(content=prompt)])
-    content = response.content.strip()
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = response.content.strip()
+    except Exception as ex:
+        print(f"⚠️ [Reviewer] QC LLM Error: {ex}. Auto-approving...")
+        return {"review_status": "APPROVED", "retry_count": retry_count}
     
     if content.startswith("STATUS: APPROVED"):
         print("✅ [Reviewer] Hasil disetujui.")
@@ -482,6 +617,7 @@ def build_graph():
     graph = StateGraph(AgentState)
     
     graph.add_node("master_intent", master_intent_node)
+    graph.add_node("batch_worker", batch_worker_node)
     graph.add_node("tool_worker", tool_worker_node)
     graph.add_node("reviewer", reviewer_node)
     graph.add_node("summarizer", summarizer_node)
@@ -489,10 +625,12 @@ def build_graph():
     graph.set_entry_point("master_intent")
     
     graph.add_conditional_edges("master_intent", router, {
+        "batch_worker": "batch_worker",
         "tool_worker": "tool_worker",
         "summarizer": "summarizer"
     })
     
+    graph.add_edge("batch_worker", "reviewer")
     graph.add_edge("tool_worker", "reviewer")
     
     graph.add_conditional_edges("reviewer", reviewer_router, {

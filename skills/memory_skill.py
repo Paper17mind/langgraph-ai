@@ -6,8 +6,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.memory_db import memory_db
 
 @tool
-def remember_fact(fact: str) -> str:
-    """Save info to long-term memory."""
+def remember_fact(fact: str = "", key: str = "", value: str = "") -> str:
+    """Save info or key-value fact to long-term memory."""
+    if not fact:
+        if key and value:
+            fact = f"{key}: {value}"
+        elif key:
+            fact = key
+        elif value:
+            fact = value
+        else:
+            return "Error: Memori yang akan disimpan tidak boleh kosong."
     return memory_db.save_fact(fact)
 
 @tool

@@ -11,7 +11,7 @@ def write_code_to_file(filename: str, content: str) -> str:
     ATURAN LOKASI FILE (STRICT):
     - Temporary / scratch scripts: WAJIB disimpan di folder `scratch/` (misal: `scratch/generate_car.py`).
     - Asset gambar / media: WAJIB disimpan di folder `data/images/` (misal: `data/images/mobil.png`).
-    - Skill / Tools baru: WAJIB disimpan di `skills/generated/`.
+    - Skill / Tools baru: WAJIB disimpan di `skills/generated/<nama>_skill.py` (WAJIB berakhiran `_skill.py` dan fungsi utama WAJIB menggunakan decorator `@tool` dari `langchain_core.tools`).
     - Kode Proyek Aplikasi: WAJIB disimpan di `projects/<project_name>/`.
     DILARANG MENULIS FILE TEMPORARY/SCRATCH DI ROOT FOLDER PROYEK!
     """

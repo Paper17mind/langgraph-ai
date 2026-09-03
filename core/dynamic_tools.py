@@ -30,7 +30,7 @@ MAX_RELEVANT_TOOLS = 12
 # Tools that must always be available regardless of the query - the agent's
 # core capabilities (memory, guideline lookup) shouldn't ever get filtered
 # out just because the wording of the query didn't happen to match them.
-CORE_TOOL_NAMES = {"remember_fact", "recall_facts", "forget_fact"}
+CORE_TOOL_NAMES = {"remember_fact", "recall_facts", "forget_fact","read_file"}
 
 # Cache: {file_path: mtime} so we only re-import files that actually changed,
 # instead of blindly importlib.import_module-ing (and never reloading) or

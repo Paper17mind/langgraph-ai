@@ -168,7 +168,7 @@ def run_cli_bot():
             # Stream the agent's steps
             for event in agent_executor.stream(
                 {"messages": messages}, 
-                config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 100}
+                config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": 20}
             ):
                 for key, value in event.items():
                     # key is the node name (e.g., 'Supervisor', 'Coder', 'PM', 'QC')
