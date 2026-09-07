@@ -3,6 +3,10 @@ import sys
 import socket
 import concurrent.futures
 import requests
+import json
+import shutil
+import tempfile
+import subprocess
 from langchain.tools import tool
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
@@ -17,10 +21,7 @@ HEADERS = {
 
 @tool
 def lookup_ip_info(ip_or_domain: str) -> str:
-    """
-    Perform OSINT Geo-IP & Network lookup for an IP address or domain name.
-    Returns geographical location, ISP, ASN, coordinates, and proxy/hosting flag.
-    """
+    """Perform Geo-IP & Network lookup for an IP or domain (location, ISP, ASN, proxy flag)."""
     target = ip_or_domain.strip().replace("http://", "").replace("https://", "").split("/")[0]
     try:
         target_ip = socket.gethostbyname(target)
@@ -52,9 +53,7 @@ def lookup_ip_info(ip_or_domain: str) -> str:
 
 @tool
 def lookup_dns_records(domain: str) -> str:
-    """
-    Perform OSINT DNS lookup (A, AAAA, MX, TXT, NS, CNAME) for a target domain.
-    """
+    """Perform DNS records lookup (A, AAAA, MX, TXT, NS, CNAME) for a domain."""
     clean_domain = domain.strip().replace("http://", "").replace("https://", "").split("/")[0]
     record_types = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"]
     results = []
@@ -99,9 +98,7 @@ def lookup_dns_records(domain: str) -> str:
 
 @tool
 def lookup_whois_info(domain: str) -> str:
-    """
-    Perform WHOIS lookup for a target domain (registrar, creation/expiration dates, name servers).
-    """
+    """Perform WHOIS lookup for a domain (registrar, creation/expiry dates, nameservers)."""
     clean_domain = domain.strip().replace("http://", "").replace("https://", "").split("/")[0]
 
     # Try python-whois package first
@@ -152,9 +149,7 @@ def lookup_whois_info(domain: str) -> str:
 
 @tool
 def lookup_subdomains(domain: str) -> str:
-    """
-    Search Certificate Transparency logs (crt.sh) for subdomains of a given domain.
-    """
+    """Search Certificate Transparency logs (crt.sh) for subdomains of a domain."""
     clean_domain = domain.strip().replace("http://", "").replace("https://", "").split("/")[0]
     try:
         url = f"https://crt.sh/?q=%.{clean_domain}&output=json"
@@ -187,15 +182,82 @@ def lookup_subdomains(domain: str) -> str:
     except Exception as e:
         return f"Error searching subdomains: {e}"
 
+def _get_user_scanner_bin() -> str:
+    """Find the user-scanner binary location."""
+    for path in [
+        shutil.which("user-scanner"),
+        "/home/papermind/.local/bin/user-scanner",
+        "/home/papermind/.pyenv/shims/user-scanner",
+        "/home/papermind/.pyenv/versions/3.10.19/bin/user-scanner"
+    ]:
+        if path and os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+    return ""
+
 @tool
 def search_username_footprint(username: str) -> str:
     """
-    Check public account footprint across 20+ social media and developer platforms for a given username.
+    Check public account footprint across 290+ social, dev, gaming, and creator platforms for a given username.
+    Uses user-scanner engine when available with automatic fallback.
     """
     clean_user = username.strip().lstrip("@")
     if not clean_user:
         return "Please provide a valid username."
 
+    scanner_bin = _get_user_scanner_bin()
+    if scanner_bin:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            tmp_json_path = tmp.name
+
+        cmd = [
+            scanner_bin,
+            "-u", clean_user,
+            "-f", "json",
+            "-o", tmp_json_path,
+            "--no-nsfw",
+            "-C", "60",
+            "-t", "8"
+        ]
+
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=50)
+
+            if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
+                with open(tmp_json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                found = [item for item in data if item.get("status") == "Found"]
+                if found:
+                    lines = [
+                        f"👤 **Username Footprint for `{clean_user}`** (Found {len(found)} active profiles via user-scanner):\n"
+                    ]
+                    for item in found:
+                        site = item.get("site_name", "Unknown")
+                        url = item.get("url", "")
+                        cat = item.get("category", "")
+                        cat_str = f" [{cat}]" if cat else ""
+                        extra = item.get("extra", {})
+
+                        detail_parts = []
+                        for k, v in extra.items():
+                            if v and str(v).strip():
+                                detail_parts.append(f"{k}: {v}")
+
+                        detail_str = f" — *({', '.join(detail_parts[:3])})*" if detail_parts else ""
+                        lines.append(f"• **{site}**{cat_str}: [{clean_user}]({url}){detail_str}")
+
+                    output = "\n".join(lines)
+                    return truncate_or_save(output, max_length=2000, context_name="username_osint")
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(tmp_json_path):
+                try:
+                    os.remove(tmp_json_path)
+                except Exception:
+                    pass
+
+    # Fallback to built-in concurrent checks
     targets = {
         "GitHub": f"https://github.com/{clean_user}",
         "Twitter/X": f"https://x.com/{clean_user}",
@@ -241,6 +303,66 @@ def search_username_footprint(username: str) -> str:
 
     output = f"👤 **Username Footprint for `{clean_user}`** ({len(found)} active profiles found):\n" + "\n".join(sorted(found))
     return truncate_or_save(output, max_length=1500, context_name="username_osint")
+
+@tool
+def scan_email_platforms(email: str) -> str:
+    """
+    Check on which online platforms and services an email address is registered using user-scanner (175+ sites).
+    """
+    clean_email = email.strip().lower()
+    if "@" not in clean_email or "." not in clean_email:
+        return f"Invalid email format: `{email}`. Please provide a valid email (e.g. user@example.com)."
+
+    scanner_bin = _get_user_scanner_bin()
+    if not scanner_bin:
+        return "user-scanner is not available on this system."
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp_json_path = tmp.name
+
+    cmd = [
+        scanner_bin,
+        "-e", clean_email,
+        "-f", "json",
+        "-o", tmp_json_path,
+        "--no-nsfw",
+        "-C", "30",
+        "-t", "8"
+    ]
+
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=50)
+
+        if not os.path.exists(tmp_json_path) or os.path.getsize(tmp_json_path) == 0:
+            return f"No registered accounts detected for email `{clean_email}`."
+
+        with open(tmp_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        found = [item for item in data if item.get("status") == "Found"]
+        if not found:
+            return f"No registered accounts detected for email `{clean_email}` across 175+ platforms."
+
+        lines = [
+            f"📧 **Registered Platform Accounts for `{clean_email}`** ({len(found)} services detected):\n"
+        ]
+        for item in found:
+            site = item.get("site_name", "Unknown")
+            cat = item.get("category", "")
+            cat_str = f" [{cat}]" if cat else ""
+            lines.append(f"• **{site}**{cat_str}: Registered / Exists")
+
+        output = "\n".join(lines)
+        return truncate_or_save(output, max_length=2000, context_name="email_platforms")
+    except Exception as e:
+        return f"Error executing email platform scan: {e}"
+    finally:
+        if os.path.exists(tmp_json_path):
+            try:
+                os.remove(tmp_json_path)
+            except Exception:
+                pass
+
 
 def _convert_to_degrees(value):
     """Helper function to convert GPS coordinates in EXIF to decimal degrees."""
@@ -327,9 +449,7 @@ def extract_image_exif(image_source: str) -> str:
 
 @tool
 def check_wayback_snapshots(url: str) -> str:
-    """
-    Check historical web page snapshots on Internet Archive Wayback Machine for a URL.
-    """
+    """Check historical web page snapshots on Wayback Machine for a given URL."""
     clean_url = url.strip()
     try:
         api_url = f"http://archive.org/wayback/available?url={clean_url}"
@@ -360,10 +480,7 @@ def check_wayback_snapshots(url: str) -> str:
 
 @tool
 def check_email_breach(email: str) -> str:
-    """
-    Check if an email address has been compromised in known data breaches using XposedOrNot Breach Analytics API.
-    Returns the total number of breaches, exposed pastes, compromised data types, and incident details.
-    """
+    """Check if an email has been compromised in data breaches via XposedOrNot."""
     clean_email = email.strip().lower()
     if "@" not in clean_email or "." not in clean_email:
         return f"Invalid email address provided: `{email}`. Please provide a valid email format (e.g. user@example.com)."
