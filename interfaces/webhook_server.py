@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import telebot
@@ -47,13 +48,16 @@ async def receive_webhook(source: str, request: Request):
         # Get fresh agent executor (Hot Reload)
         from core.agent_graph import global_callbacks
         agent_executor = get_agent_executor()
-        result = agent_executor.invoke(
-            {"messages": messages}, 
-            config={"callbacks": global_callbacks, "configurable": {"thread_id": f"webhook_{source}"}}
-        )
         
-        ai_response = result["messages"][-1].content
-        
+        # Run agent in thread pool to avoid blocking FastAPI event loop
+        def _run_agent():
+            return agent_executor.invoke(
+                {"messages": messages}, 
+                config={"callbacks": global_callbacks, "configurable": {"thread_id": f"webhook_{source}"}}
+            )
+            
+        result = await asyncio.to_thread(_run_agent)
+        ai_response = result["messages"][-1].content if result and "messages" in result else "Webhook diterima."
         # Send proactive notification to Telegram
         if bot and ALLOWED_USER_ID:
             # Menggunakan parse_mode Markdown agar hasil dari AI terlihat rapi

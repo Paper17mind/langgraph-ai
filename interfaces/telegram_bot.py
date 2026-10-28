@@ -1,4 +1,5 @@
 import os
+import asyncio
 from core import history_manager
 from core import scheduler_db
 from telegram import Update
@@ -100,14 +101,53 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await check_auth(update): return
     help_text = (
         "**Daftar Perintah (Slash Commands):**\n"
+        "- `/register <path>` : Daftarkan project untuk dipantau AI Maintainer.\n"
+        "- `/projects` : Daftar seluruh project yang terdaftar dan statusnya.\n"
+        "- `/audit <nama>` : Jalankan audit CVE runtime, dependensi, dan SAST kode.\n"
         "- `/project [nama]` : Memilih proyek aktif atau melihat daftar proyek.\n"
-        "- `/session <nama_sesi>` : Berpindah ke ruang/konteks obrolan yang berbeda (contoh: `/session livin`).\n"
+        "- `/session <nama_sesi>` : Berpindah ke ruang/konteks obrolan yang berbeda.\n"
         "- `/model <nama_model>` : Mengubah model LLM yang digunakan secara real-time.\n"
         "- `/memory` : Menampilkan seluruh isi memori jangka panjang (ChromaDB).\n"
-        "- `/clear` : Membersihkan riwayat chat (history SQLite) pada sesi yang sedang aktif.\n"
-        "- `/help` : Menampilkan pesan bantuan ini."
+        "- `/clear` : Membersihkan riwayat chat pada sesi yang sedang aktif.\n"
+        "- `/help` : Menampilkan pesan bantuan ini.\n"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
+
+async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await check_auth(update): return
+    from skills.maintainer_skill import list_registered_projects
+    msg = list_registered_projects.invoke({})
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def cmd_audit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await check_auth(update): return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Penggunaan: /audit <nama_project>\nContoh: /audit my-app")
+        return
+    proj_name = args[0]
+    await update.message.reply_text(f"⏳ Sedang menjalankan audit komprehensif untuk `{proj_name}`...", parse_mode="Markdown")
+    from skills.maintainer_skill import audit_project
+    report = await asyncio.to_thread(audit_project.invoke, {"project_name": proj_name})
+    if len(report) > 4000:
+        report = report[:4000] + "\n...[dipotong karena batas pesan Telegram]"
+    try:
+        await update.message.reply_text(report, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(report, parse_mode=None)
+
+async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await check_auth(update): return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Penggunaan: /register <path_project> [nama_opsional]\nContoh: /register /var/www/projects/my-api")
+        return
+    path_target = args[0]
+    name_target = args[1] if len(args) > 1 else None
+    await update.message.reply_text(f"⏳ Memindai dan mendaftarkan `{path_target}`...", parse_mode="Markdown")
+    from skills.maintainer_skill import register_project
+    res = await asyncio.to_thread(register_project.invoke, {"project_path": path_target, "custom_name": name_target})
+    await update.message.reply_text(res, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await check_auth(update): return
@@ -142,64 +182,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     messages.append(HumanMessage(content=text))
     
     try:
-        # Get fresh agent executor (Hot Reload)
-        # Create executor dynamically
         from core.agent_graph import global_callbacks
         agent_executor = get_agent_executor(active_project=active_project, user_query=text)
         
-        # Invoke Agent
-        # Note: Depending on deployment, a long agent run might block if not using async invoke (ainvoke)
-        from rich.console import Console
-        from rich.panel import Panel
-        console = Console()
-        console.print(f"\n[bold green]=== Processing Telegram Request from {session_id} ===[/]")
-        
-        final_message = ""
         recursion_limit = int(os.getenv("RECURSION_LIMIT", "20"))
-        for event in agent_executor.stream(
-            {"messages": messages}, 
-            config={"callbacks": global_callbacks, "configurable": {"thread_id": session_id}, "recursion_limit": recursion_limit}
-        ):
-            for key, value in event.items():
-                console.print(f"[bold magenta]🤖 Node Finished:[/] {key}")
-                
-                if "next" in value:
-                    console.print(f"[bold blue]🔀 Routing to:[/] {value['next']}")
-                    
-                if "messages" in value:
-                    agent_msgs = value.get("messages", [])
-                    if not isinstance(agent_msgs, list):
-                        agent_msgs = [agent_msgs]
-                        
-                    for m in agent_msgs:
-                        # Log tool outputs (ToolMessage)
-                        if getattr(m, 'type', '') == 'tool':
-                            out_str = str(m.content)
-                            console.print(Panel(out_str[:1000] + ("..." if len(out_str) > 1000 else ""), title=f"🔧 Tool Output ({m.name})", border_style="cyan"))
-                        else:
-                            # AI/Human Message
-                            if hasattr(m, 'content') and m.content:
-                                final_message = m.content
-                                out_str = str(m.content)
-                                console.print(Panel(out_str[:1000] + ("..." if len(out_str) > 1000 else ""), title=f"💬 Output from {key}", border_style="green"))
-                                
-                            if hasattr(m, 'tool_calls') and m.tool_calls:
-                                for tc in m.tool_calls:
-                                    console.print(f"[bold yellow]🛠️ Tool Call:[/] {tc['name']}")
-                                    if 'args' in tc:
-                                        console.print(f"[bold yellow]   Args:[/] {tc['args']}")
-                                
+        config = {
+            "callbacks": global_callbacks,
+            "configurable": {"thread_id": session_id, "chat_id": user_id},
+            "recursion_limit": recursion_limit,
+        }
+        
+        # Non-blocking async execution: run agent_executor.invoke off the asyncio loop
+        def _run_agent():
+            return agent_executor.invoke({"messages": messages}, config=config)
+            
+        result = await asyncio.to_thread(_run_agent)
+        final_message = ""
+        if result and "messages" in result and result["messages"]:
+            last_m = result["messages"][-1]
+            final_message = getattr(last_m, "content", "")
+            
         if not final_message:
             final_message = "⚠️ Maaf, agent tidak memberikan respons (pesan kosong). Silakan coba lagi."
-            
         response = final_message
     except Exception as e:
         response = f"Error executing agent: {e}"
-        
     # Save to history
-    history_manager.add_message(session_id, "user", text)
-    history_manager.add_message(session_id, "assistant", response)
-        
+    await asyncio.to_thread(history_manager.add_message, session_id, "user", text)
+    await asyncio.to_thread(history_manager.add_message, session_id, "assistant", response)
     # Send response
     # Telegram max message length is 4096
     if len(response) > 4000:
@@ -232,6 +242,9 @@ def run_telegram_bot():
     application = Application.builder().token(token).build()
     
     # Register Slash Commands
+    application.add_handler(CommandHandler("register", cmd_register))
+    application.add_handler(CommandHandler("projects", cmd_projects))
+    application.add_handler(CommandHandler("audit", cmd_audit))
     application.add_handler(CommandHandler("project", cmd_project))
     application.add_handler(CommandHandler("session", cmd_session))
     application.add_handler(CommandHandler("model", cmd_model))

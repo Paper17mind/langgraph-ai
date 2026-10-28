@@ -445,9 +445,12 @@ def batch_worker_node(state: AgentState):
                 pass
 
     audit_trail = "\n".join(tools_called) if tools_called else "TIDAK ADA TOOL YANG DIPANGGIL."
-    final_output = f"Batch Tool Pipeline selesai mengeksekusi {len(pipeline)} langkah.\n\nHasil Akhir:\n{prev_output}"
-    
-    return {"messages": [AIMessage(content=f"[Riwayat Tools & Output]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")]}
+    clean_result = prev_output.strip() if prev_output else f"Batch Tool Pipeline selesai mengeksekusi {len(pipeline)} langkah."
+    final_output = f"Batch Tool Pipeline selesai mengeksekusi {len(pipeline)} langkah.\n\nHasil Akhir:\n{clean_result}"
+    return {
+        "messages": [AIMessage(content=f"[Riwayat Tools & Output]:\n{audit_trail}\n\n[Hasil dari Tool Worker]:\n{final_output}")],
+        "fast_pass": True
+    }
 
 def tool_worker_node(state: AgentState):
     """
@@ -612,6 +615,18 @@ def summarizer_node(state: AgentState):
     if "USE_TOOLS" not in intent_val:
         # Jika Master langsung merespons tanpa tools
         return {"messages": [AIMessage(content=intent_val)]}
+
+    last_msg_content = str(state["messages"][-1].content)
+
+    # FAST-PASS SHORT-CIRCUIT: Jika output dari tool worker terstruktur dan bersih,
+    # langsung kembalikan tanpa boros token dan waktu memanggil LLM Summarizer lagi!
+    if state.get("fast_pass") and "[Hasil dari Tool Worker]:" in last_msg_content:
+        extracted = last_msg_content.split("[Hasil dari Tool Worker]:")[-1].strip()
+        if "Hasil Akhir:\n" in extracted:
+            extracted = extracted.split("Hasil Akhir:\n")[-1].strip()
+        if extracted and not any(err in extracted.lower() for err in ["traceback", "syntaxerror", "failed:", "error:"]):
+            print("⚡ [Summarizer Fast-Pass] Output bersih dan terstruktur (0 Token & 0 Delay).")
+            return {"messages": [AIMessage(content=extracted)]}
         
     print("\n📝 [Summarizer Node] Memformulasikan Jawaban Akhir...")
     llm = init_tools_llm().with_config(callbacks=global_callbacks)
@@ -716,9 +731,15 @@ def build_graph():
     
     return graph.compile()
 
-def get_agent_executor(active_project: str = None, user_query: str = None):
-    # Mengembalikan graph yang sudah di-compile.
-    # Karena telegram_bot dkk mungkin mengandalkan input {"messages": [...]},
-    # StateGraph ini kompatibel.
-    return build_graph()
+_compiled_graph_singleton = None
+
+def get_agent_executor(active_project: str = None, user_query: str = None, force_recompile: bool = False):
+    """
+    Returns cached compiled StateGraph singleton.
+    Re-compiling on every request wastes CPU cycles; reuse compiled instance.
+    """
+    global _compiled_graph_singleton
+    if _compiled_graph_singleton is None or force_recompile:
+        _compiled_graph_singleton = build_graph()
+    return _compiled_graph_singleton
 
