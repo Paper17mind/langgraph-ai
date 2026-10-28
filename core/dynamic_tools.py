@@ -1,60 +1,67 @@
 import os
 import ast
+import re
 from langchain_core.tools import BaseTool
 import importlib
 import inspect
 import functools
 from core.dynamic_prompt import _tokenize
-# ---------------------------------------------------------------------------
-# Tool loading (with mtime-based caching + hot-reload + pre-import validation)
-# ---------------------------------------------------------------------------
 
 _BASE_SKILLS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "skills")
 _GENERATED_SKILLS_DIR = os.path.join(_BASE_SKILLS_DIR, "generated")
-# ---------------------------------------------------------------------------
-# Tool output size limiter (Opsi C)
-# ---------------------------------------------------------------------------
-# If a tool returns more than TOOL_OUTPUT_THRESHOLD chars, we save the full
-# output to a timestamped file and return only a short summary to the LLM.
-# This prevents huge HTML/JSON/log dumps from bloating the context window.
-
-TOOL_OUTPUT_THRESHOLD = 1500  # chars - tune as needed
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+TOOL_OUTPUT_THRESHOLD = 1500
 
-# Only bother filtering once the tool count gets large enough that context
-# bloat is a real concern. Below this, just bind everything - filtering has
-# no benefit and only risks accidentally hiding a tool the agent needed.
-TOOL_FILTER_THRESHOLD = 15
-MAX_RELEVANT_TOOLS = 12
-
-# Tools that must always be available regardless of the query - the agent's
-# core capabilities (memory, guideline lookup) shouldn't ever get filtered
-# out just because the wording of the query didn't happen to match them.
-CORE_TOOL_NAMES = {
-    "remember_fact", "recall_facts", "forget_fact",
-    "read_file", "register_project", "audit_project", "list_registered_projects"
-}
-
-# Cache: {file_path: mtime} so we only re-import files that actually changed,
-# instead of blindly importlib.import_module-ing (and never reloading) or
-# reloading everything every single turn (v1's problem).
+# Cache: {file_path: mtime}
 _tool_cache = {
     "tools": [],       # list[BaseTool]
     "file_mtimes": {},  # path -> last seen mtime
 }
 
-def _get_decorator_name(dec: ast.expr) -> str:
-    """
-    Resolve the name of a decorator node, handling both bare decorators
-    (@tool, @module.tool) and call-style decorators with arguments
-    (@tool(name="..."), @module.tool(return_direct=True)).
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. CORE TOOLS: Selalu tersedia di setiap percakapan
+# ─────────────────────────────────────────────────────────────────────────────
+CORE_TOOL_NAMES = {
+    "remember_fact", "recall_facts", "forget_fact",
+    "read_file", "register_project", "audit_project", "list_registered_projects"
+}
 
-    FIX: the previous version only handled ast.Name / ast.Attribute and
-    fell through to "" for ast.Call, which meant any @tool(...) with
-    arguments was silently invisible to the validator - a perfectly
-    valid generated skill would get rejected with "No @tool-decorated
-    function found."
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. DOMAIN INTENTS: Menghubungkan sinonim / niat user ke kumpulan tools terkait
+# ─────────────────────────────────────────────────────────────────────────────
+DOMAIN_KEYWORDS = {
+    "maintainer": {
+        "keywords": {"audit", "cve", "vulnerability", "maintainer", "project", "rentan", "keamanan", "scan", "bug", "dep", "dependency", "patch"},
+        "tools": {"register_project", "list_registered_projects", "audit_project", "audit_dependencies", "audit_web_security", "scan_local_code_security", "read_file", "write_code_to_file"}
+    },
+    "coding": {
+        "keywords": {"code", "coding", "buatkan", "tulis", "file", "edit", "bikin", "fungsi", "function", "class", "script", "program", "baris", "line"},
+        "tools": {"write_code_to_file", "read_file", "read_specific_line", "write_specific_line", "search_in_file", "init_project", "save_fsd_document", "execute_system_command"}
+    },
+    "codegen": {
+        "keywords": {"schema", "codegen", "scaffold", "generate", "framework", "express", "laravel", "fastapi", "model", "controller", "route"},
+        "tools": {"validate_project_schema", "scaffold_project_from_schema", "get_codegen_queue_status", "read_file", "write_code_to_file"}
+    },
+    "osint": {
+        "keywords": {"ip", "whois", "dns", "domain", "subdomain", "email", "breach", "kebocoran", "username", "footprint", "exif", "wayback", "snapshot", "osint"},
+        "tools": {"lookup_whois_info", "lookup_ip_info", "lookup_dns_records", "lookup_subdomains", "check_email_breach", "scan_email_platforms", "search_username_footprint", "check_wayback_snapshots", "extract_image_exif"}
+    },
+    "web": {
+        "keywords": {"search", "cari", "googling", "duckduckgo", "browsing", "url", "link", "web", "fetch", "crawl", "scrape", "scraping", "baca web"},
+        "tools": {"search_duckduckgo", "fetch_url_content", "crawl"}
+    },
+    "system": {
+        "keywords": {"terminal", "bash", "shell", "command", "cmd", "exec", "eksekusi", "jalankan", "pip", "schedule", "jadwal", "ingatkan", "alarm", "token", "usage"},
+        "tools": {"execute_system_command", "schedule_task", "get_token_usage_stats"}
+    },
+    "multimedia": {
+        "keywords": {"gambar", "image", "foto", "youtube", "transkrip", "transcript", "video", "visual"},
+        "tools": {"generate_image_tool", "analyze_image_tool", "get_youtube_transcript"}
+    }
+}
+
+
+def _get_decorator_name(dec: ast.expr) -> str:
     target = dec.func if isinstance(dec, ast.Call) else dec
     if isinstance(target, ast.Name):
         return target.id
@@ -62,197 +69,138 @@ def _get_decorator_name(dec: ast.expr) -> str:
         return target.attr
     return ""
 
+
 def _validate_skill_source(file_path: str) -> tuple[bool, str]:
-    """
-    Sanity-check a generated skill file BEFORE it's ever imported.
-    We don't execute anything here - just parse the AST. This catches
-    syntax errors and obviously-unsafe patterns without running untrusted
-    code. It is NOT a full security sandbox, just a cheap first filter.
-    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source = f.read()
+    except Exception as e:
+        return False, f"Could not read file: {e}"
+
+    try:
         tree = ast.parse(source, filename=file_path)
     except SyntaxError as e:
-        return False, f"Syntax error: {e}"
-    except Exception as e:
-        return False, f"Could not read/parse file: {e}"
+        return False, f"Syntax error at line {e.lineno}: {e.msg}"
 
-    # Require at least one function decorated with @tool (bare or with
-    # arguments) - otherwise it's not going to register as a BaseTool
-    # anyway, so no point importing it.
-    has_tool_decorator = False
+    has_tool = False
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for dec in node.decorator_list:
-                if _get_decorator_name(dec) == "tool":
-                    has_tool_decorator = True
+                name = _get_decorator_name(dec)
+                if name == "tool":
+                    has_tool = True
+                    break
+        if has_tool:
+            break
 
-    if not has_tool_decorator:
-        return False, "No @tool-decorated function found - refusing to import."
+    if not has_tool:
+        return False, "No @tool-decorated function found."
 
     return True, "ok"
 
 
 def _wrap_tool_output(tool: BaseTool) -> BaseTool:
-    """
-    Wraps a BaseTool so that if its string output exceeds TOOL_OUTPUT_THRESHOLD,
-    the full output is saved to a file and a compact summary is returned instead.
-    The LLM only sees the summary + file path, keeping context window small.
+    orig_func = tool.func
+    orig_coroutine = tool.coroutine
 
-    FIX (vs previous version):
-    - Uses object.__setattr__ instead of plain attribute assignment, since
-      BaseTool is a pydantic model and direct assignment to a non-field
-      attribute can raise under some pydantic v2 configs.
-    - CRITICAL: uses @functools.wraps(original_run) on both wrappers.
-      LangChain does NOT always pass `config`/`run_manager` blindly - it
-      inspects the callable's signature at call time (inspect.signature)
-      to decide whether the tool's _run/_arun accepts those params, and
-      only injects them if it sees them declared. A wrapper written as
-      plain `def _run_with_limit(*args, **kwargs)` hides those parameter
-      names from that inspection, so LangChain silently stops passing
-      `config` - but the REAL underlying _run (e.g. StructuredTool._run)
-      still requires `config` as a mandatory keyword-only argument,
-      causing: "StructuredTool._run() missing 1 required keyword-only
-      argument: 'config'". functools.wraps sets __wrapped__, which
-      inspect.signature() follows by default, so LangChain sees the
-      original signature and keeps injecting config/run_manager
-      correctly - while the wrapper body itself stays generic and just
-      forwards whatever it receives.
-    - Also wraps _arun (if the tool defines a custom async implementation),
-      so large outputs from async tools get truncated too. Tools that don't
-      override _arun (i.e. they fall back to running _run in a thread) are
-      already covered by the _run wrap above.
-    """
-    original_run = tool._run
-    original_arun = getattr(tool, "_arun", None)
+    def _truncate_and_save(result: str, tool_name: str) -> str:
+        if len(result) <= TOOL_OUTPUT_THRESHOLD:
+            return result
 
-    def _limit(result_str: str) -> str:
-        if len(result_str) <= TOOL_OUTPUT_THRESHOLD:
-            return result_str
-        from datetime import datetime
-        tool_log_dir = os.path.join(_LOGS_DIR, tool.name)
-        os.makedirs(tool_log_dir, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        fname = f"{ts}.txt"
-        fpath = os.path.join(tool_log_dir, fname)
+        os.makedirs(_LOGS_DIR, exist_ok=True)
+        import time
+        ts = int(time.time() * 1000)
+        filename = f"{tool_name}_{ts}.log"
+        file_path = os.path.join(_LOGS_DIR, filename)
+
         try:
-            with open(fpath, "w", encoding="utf-8") as f:
-                f.write(result_str)
-        except Exception:
-            return result_str  # fallback: return as-is if save fails
-        preview = result_str[:300].replace("\n", " ")
-        rel_path = f"logs/{tool.name}/{fname}"
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(result)
+        except Exception as e:
+            return result[:TOOL_OUTPUT_THRESHOLD] + f"\n\n[Warning: failed to save full log: {e}]"
+
+        head = result[:800]
+        tail = result[-400:]
+        total_len = len(result)
+
         return (
-            f"[Output terlalu panjang: {len(result_str):,} chars]\n"
-            f"✅ Sudah disimpan ke: {rel_path}\n"
-            f"Preview (300 chars pertama):\n{preview}..."
+            f"[Output terlalu panjang: {total_len} karakter. "
+            f"Sudah disimpan ke: {file_path}]\n\n"
+            f"--- Potongan Awal ---\n{head}\n\n"
+            f"--- Potongan Akhir ---\n{tail}\n\n"
+            f"[Gunakan tool read_file dengan path di atas jika butuh membaca seluruh output]"
         )
 
-    @functools.wraps(original_run)
-    def _run_with_limit(*args, **kwargs):
-        result = original_run(*args, **kwargs)
-        result_str = str(result) if not isinstance(result, str) else result
-        return _limit(result_str)
+    if orig_func:
+        @functools.wraps(orig_func)
+        def sync_wrapper(*args, **kwargs):
+            res = orig_func(*args, **kwargs)
+            return _truncate_and_save(str(res), tool.name)
+        tool.func = sync_wrapper
 
-    object.__setattr__(tool, "_run", _run_with_limit)
-
-    if original_arun is not None:
-        @functools.wraps(original_arun)
-        async def _arun_with_limit(*args, **kwargs):
-            result = await original_arun(*args, **kwargs)
-            result_str = str(result) if not isinstance(result, str) else result
-            return _limit(result_str)
-
-        object.__setattr__(tool, "_arun", _arun_with_limit)
+    if orig_coroutine:
+        @functools.wraps(orig_coroutine)
+        async def async_wrapper(*args, **kwargs):
+            res = await orig_coroutine(*args, **kwargs)
+            return _truncate_and_save(str(res), tool.name)
+        tool.coroutine = async_wrapper
 
     return tool
 
-# ---------------------------------------------------------------------------
-# Dynamic tool retrieval (keyword-based - no extra LLM round trip)
-# ---------------------------------------------------------------------------
-# v1 asked the LLM itself to list relevant tool names as free text, then
-# parsed that with .split(","). That's an extra LLM call every single turn
-# AND fragile (breaks the moment the model adds a sentence of preamble).
-# Instead we score tools by simple keyword overlap between the user's
-# query and each tool's name/description. It's not as smart as embeddings,
-# but it's free, instant, deterministic, and "good enough" for narrowing
-# down a large generated-skills folder so the main LLM call isn't dragging
-# around 100 tool schemas it'll never use.
 
 def select_relevant_tools(all_tools: list, query: str) -> list:
     """
-    Narrow `all_tools` down to the ones most likely relevant to `query`,
-    using plain keyword overlap. Core tools are always kept. If there
-    aren't enough tools to matter, or nothing scores above zero, falls
-    back to returning everything (fail-open, not fail-closed - we'd
-    rather bind a few extra unused tools than accidentally hide the one
-    the agent actually needs).
+    Pilih tools secara cerdas & fail-safe:
+    1. Selalu sertakan CORE_TOOL_NAMES (memory, project registry, read_file).
+    2. Deteksi Domain Intent dari query (Maintainer, Coding, Codegen, OSINT, Web, System, Multimedia).
+    3. Jika domain cocok, sertakan tools domain tersebut.
+    4. Keyword overlap scoring sebagai layer kedua untuk tools yang tidak masuk domain mapping.
+    5. FAIL-OPEN: Jika query umum atau hasil filter kosong, kembalikan SEMUA tools agar tidak ada tool yang hilang.
     """
-    if len(all_tools) <= TOOL_FILTER_THRESHOLD or not query:
+    if not all_tools or not query:
         return all_tools
 
+    query_lower = query.lower()
     query_tokens = _tokenize(query)
-    if not query_tokens:
-        return all_tools
 
-    core = [t for t in all_tools if t.name in CORE_TOOL_NAMES]
-    candidates = [t for t in all_tools if t.name not in CORE_TOOL_NAMES]
+    # 1. Start with Core Tools
+    selected_names = set(CORE_TOOL_NAMES)
 
-    scored = []
-    for t in candidates:
+    # 2. Match Domain Intent
+    matched_domains = False
+    for domain, config in DOMAIN_KEYWORDS.items():
+        if config["keywords"] & query_tokens or any(kw in query_lower for kw in config["keywords"]):
+            selected_names.update(config["tools"])
+            matched_domains = True
+
+    # 3. Direct Tool Name Matching (jika user menyebut nama tool atau bagian namanya)
+    for t in all_tools:
+        clean_name = t.name.lower().replace("_", " ")
+        if clean_name in query_lower or t.name.lower() in query_lower:
+            selected_names.add(t.name)
+
+    # 4. Keyword Overlap Scoring fallback
+    for t in all_tools:
+        if t.name in selected_names:
+            continue
         tool_tokens = _tokenize(t.name) | _tokenize(t.description or "")
-        overlap = len(query_tokens & tool_tokens)
-        # Extra weight if the tool name itself shows up in the query -
-        # strong signal the user (or a prior turn) is referring to it directly.
-        if t.name.lower().replace("_", " ") in query.lower():
-            overlap += 3
-        if overlap > 0:
-            scored.append((overlap, t))
+        if len(query_tokens & tool_tokens) >= 2:
+            selected_names.add(t.name)
 
-    if not scored:
-        # Nothing matched at all - safer to return everything than to
-        # silently strip the agent down to just the core tools.
+    # 5. Fail-Safe: Jika tidak ada domain yang cocok (misal query santai / ambigu),
+    # atau tools yang terpilih terlalu sedikit padahal user minta sesuatu, FAIL-OPEN (return all).
+    if not matched_domains and len(selected_names) <= len(CORE_TOOL_NAMES):
         return all_tools
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = [t for _, t in scored[:MAX_RELEVANT_TOOLS]]
+    # Filter tool objects
+    tool_map = {t.name: t for t in all_tools}
+    result = [tool_map[name] for name in selected_names if name in tool_map]
 
-    # Keep result order stable-ish and de-duplicated
-    seen = set()
-    result = []
-    for t in core + top:
-        if t.name not in seen:
-            seen.add(t.name)
-            result.append(t)
-    print(f"[TOOLS] Selected: {result}")
-    return result
+    # Pastikan jika filter menghasilkan list kosong (kasus ekstrem), kembalikan all_tools
+    return result if result else all_tools
+
 
 def load_all_tools(force: bool = False):
-    """
-    Scan skills/ and skills/generated/ for *_skill.py files, validate them,
-    import (or re-import if changed) them, and collect any BaseTool
-    instances defined inside.
-
-    - actually reloads a module if the underlying file changed (mtime),
-      so edits to a previously-broken generated skill take effect
-      without restarting the process.
-    - validates the file with ast.parse before importing it, so a
-      malformed/unsafe-looking generated file doesn't get silently
-      imported (and doesn't crash the whole tool-loading pass).
-    - is cheap to call every turn: if nothing changed on disk, it
-      returns the cached tool list instead of re-scanning imports.
-
-    FIX (vs previous version): files that fail validation or fail to
-    import now still get their mtime recorded in the cache. Previously
-    a broken file's mtime was never cached, which meant the "did
-    anything change?" check compared None vs its real mtime on every
-    single call and returned True forever - silently forcing a full
-    re-scan/re-import of ALL skill files on every turn for as long as
-    that one broken file existed, defeating the whole point of the
-    mtime cache. Now a broken file is only retried when it's actually
-    edited again (its mtime changes).
-    """
     dirs_to_scan = [
         (_BASE_SKILLS_DIR, "skills"),
         (_GENERATED_SKILLS_DIR, "skills.generated"),
@@ -273,11 +221,10 @@ def load_all_tools(force: bool = False):
             if _tool_cache["file_mtimes"].get(file_path) != mtime:
                 changed = True
 
-    # Also detect deletions (a file that was cached but no longer exists)
     if set(_tool_cache["file_mtimes"].keys()) - set(current_files.keys()):
         changed = True
 
-    if not changed:
+    if not changed and _tool_cache["tools"]:
         return _tool_cache["tools"]
 
     dynamic_tools = []
@@ -289,7 +236,7 @@ def load_all_tools(force: bool = False):
         ok, reason = _validate_skill_source(file_path)
         if not ok:
             print(f"[skills] Skipping {module_name}: {reason}")
-            new_mtimes[file_path] = mtime  # cache even on failure - avoid retry-every-turn
+            new_mtimes[file_path] = mtime
             continue
 
         try:
@@ -299,7 +246,7 @@ def load_all_tools(force: bool = False):
                 module = importlib.import_module(module_name)
         except Exception as e:
             print(f"[skills] Warning: failed to load {module_name}: {e}")
-            new_mtimes[file_path] = mtime  # same - only retry once the file is edited again
+            new_mtimes[file_path] = mtime
             continue
 
         for _, obj in inspect.getmembers(module):
