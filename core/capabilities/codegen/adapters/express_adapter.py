@@ -23,7 +23,7 @@ _TYPE_MAP_SEQ = {
     "json":       "DataTypes.JSON",
 }
 
-TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "express")
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "express")
 
 env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(TEMPLATE_DIR),

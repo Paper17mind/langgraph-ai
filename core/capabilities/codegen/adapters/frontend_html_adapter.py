@@ -13,7 +13,7 @@ import os
 import re
 import jinja2
 
-TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "frontend_html")
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "frontend_html")
 
 env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(TEMPLATE_DIR),

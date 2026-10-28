@@ -253,7 +253,7 @@ def run_worker(delay_seconds: int = 3):
                 import json as _json
                 with open(schema_path, "r") as f:
                     schema = _json.load(f)
-                from skills.generated.codegen import ADAPTERS
+                from core.capabilities.codegen import ADAPTERS
                 adapter = ADAPTERS[framework](schema, output_dir)
                 adapter_cache[cache_key] = adapter
             adapter = adapter_cache[cache_key]
