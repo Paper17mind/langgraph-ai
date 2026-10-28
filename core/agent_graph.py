@@ -311,7 +311,9 @@ def master_intent_node(state: AgentState):
             chat_history += f"[{role}]: {content}\n"
             
     all_tools = load_all_tools()
-    tools_summary = ", ".join([t.name for t in all_tools])
+    # Dynamic tool selection: filter relevant tools based on query to prevent context bloat and hallucination
+    selected_tools = select_relevant_tools(all_tools, user_query or "")
+    tools_summary = ", ".join([t.name for t in selected_tools])
 
     prompt = f"""
 {system}
